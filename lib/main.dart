@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -5,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibration/vibration.dart';
 
 import 'db.dart';
+import 'pages.dart';
 
 void main() => runApp(const TasbihApp());
 
@@ -34,29 +37,75 @@ class _CounterPageState extends State<CounterPage> {
   int _count = 0;
   bool _vibrate = true;
   SharedPreferences? _prefs;
+  List<Category> _cats = [];
+  List<Prayer> _prayers = [];
+  int? _currentId;
+  DateTime? _start; // when the running count began; decides date and prayer
 
   @override
   void initState() {
     super.initState();
-    SharedPreferences.getInstance().then((p) {
-      _prefs = p;
-      setState(() {
-        _count = p.getInt('count') ?? 0;
-        _vibrate = p.getBool('vibrate') ?? true;
-      });
+    _init();
+  }
+
+  Future<void> _init() async {
+    final p = await SharedPreferences.getInstance();
+    _prefs = p;
+    final startStr = p.getString('start');
+    setState(() {
+      _count = p.getInt('count') ?? 0;
+      _vibrate = p.getBool('vibrate') ?? true;
+      _currentId = p.getInt('currentCategory');
+      _start = startStr == null ? null : DateTime.tryParse(startStr);
     });
+    await _reload();
+  }
+
+  Future<void> _reload() async {
+    final cats = await Db.categories();
+    final prayers = await Db.prayers();
+    if (mounted) {
+      setState(() {
+        _cats = cats;
+        _prayers = prayers;
+      });
+    }
+  }
+
+  Category? get _current {
+    if (_cats.isEmpty) return null;
+    return _cats.firstWhere((c) => c.id == _currentId, orElse: () => _cats.first);
+  }
+
+  Category _nextAfter(int id) {
+    final i = _cats.indexWhere((c) => c.id == id);
+    return _cats[(i + 1) % _cats.length];
+  }
+
+  void _setCurrent(int id) {
+    _currentId = id;
+    _prefs?.setInt('currentCategory', id);
+  }
+
+  Future<void> _vibrateFor(int ms) async {
+    if (!_vibrate) return;
+    if (await Vibration.hasVibrator()) {
+      Vibration.vibrate(duration: ms);
+    } else {
+      HapticFeedback.lightImpact();
+    }
   }
 
   Future<void> _tap() async {
-    setState(() => _count++);
-    _prefs?.setInt('count', _count);
-    if (_vibrate) {
-      if (await Vibration.hasVibrator()) {
-        Vibration.vibrate(duration: 30);
-      } else {
-        HapticFeedback.lightImpact();
+    setState(() {
+      if (_start == null) {
+        _start = DateTime.now();
+        _prefs?.setString('start', _start!.toIso8601String());
       }
-    }
+      _count++;
+    });
+    _prefs?.setInt('count', _count);
+    _vibrateFor(30);
   }
 
   void _toggleVibrate() {
@@ -64,15 +113,55 @@ class _CounterPageState extends State<CounterPage> {
     _prefs?.setBool('vibrate', _vibrate);
   }
 
+  void _clearSession() {
+    setState(() {
+      _count = 0;
+      _start = null;
+    });
+    _prefs?.setInt('count', 0);
+    _prefs?.remove('start');
+  }
+
+  /// Saves the running count into [cat] under the prayer window it started in,
+  /// then moves on to the next zikir in the list.
+  Future<void> _commit(Category cat) async {
+    final start = _start ?? DateTime.now();
+    final prayer = prayerAt(_prayers, start);
+    final saved = _count;
+    await Db.saveCount(cat.id, DateFormat('yyyy-MM-dd').format(start), prayer, saved);
+    final next = _nextAfter(cat.id);
+    _setCurrent(next.id);
+    _clearSession();
+    await _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(
+            'Saved $saved → ${cat.name}${prayer.isEmpty ? '' : ' ($prayer)'}\nNext: ${next.name}'),
+      ));
+  }
+
   Future<void> _reset() async {
-    if (_count == 0) return;
-    final saved = await showDialog<bool>(
+    final cur = _current;
+    if (_count == 0 || cur == null) return;
+    await _commit(cur);
+  }
+
+  /// Hold on the reset button: choose the zikir yourself instead of the queue.
+  Future<void> _choose() async {
+    _vibrateFor(80);
+    final id = await showDialog<int>(
       context: context,
-      builder: (_) => SaveDialog(count: _count),
+      builder: (_) => PickCategoryDialog(cats: _cats, currentId: _current?.id),
     );
-    if (saved == true) {
-      setState(() => _count = 0);
-      _prefs?.setInt('count', 0);
+    if (id == null) return;
+    await _reload();
+    final cat = _cats.firstWhere((c) => c.id == id);
+    if (_count == 0) {
+      setState(() => _setCurrent(cat.id));
+    } else {
+      await _commit(cat);
     }
   }
 
@@ -80,22 +169,26 @@ class _CounterPageState extends State<CounterPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: const Text('Reset without saving?'),
+        title: const Text('Clear without saving?'),
         content: Text('The count of $_count will be lost.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Reset')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Clear')),
         ],
       ),
     );
-    if (ok == true) {
-      setState(() => _count = 0);
-      _prefs?.setInt('count', 0);
-    }
+    if (ok == true) _clearSession();
+  }
+
+  Future<void> _open(Widget page) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+    _reload();
   }
 
   @override
   Widget build(BuildContext context) {
+    final cur = _current;
+    final prayer = prayerAt(_prayers, _start ?? DateTime.now());
     return Scaffold(
       backgroundColor: const Color(0xFF5AB0FF),
       appBar: AppBar(
@@ -111,14 +204,21 @@ class _CounterPageState extends State<CounterPage> {
           IconButton(
             tooltip: 'Summary',
             icon: const Icon(Icons.bar_chart),
-            onPressed: () => Navigator.push(
-                context, MaterialPageRoute(builder: (_) => const SummaryPage())),
+            onPressed: () => _open(const SummaryPage()),
+          ),
+          PopupMenuButton<int>(
+            onSelected: (v) => _open(v == 0 ? const ZikirListPage() : const PrayerTimesPage()),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 0, child: Text('জিকিরের তালিকা')),
+              PopupMenuItem(value: 1, child: Text('নামাজের সময়সূচী')),
+            ],
           ),
         ],
       ),
       body: SafeArea(
         child: Column(
           children: [
+            InfoCard(name: cur?.name ?? '', target: cur?.target ?? '', prayer: prayer),
             Expanded(
               child: Center(
                 child: FittedBox(
@@ -129,19 +229,19 @@ class _CounterPageState extends State<CounterPage> {
                       count: _count,
                       onTap: _tap,
                       onReset: _reset,
+                      onHold: _choose,
                     ),
                   ),
                 ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: TextButton.icon(
-                onPressed: _discard,
-                style: TextButton.styleFrom(foregroundColor: Colors.white),
-                icon: const Icon(Icons.delete_outline),
-                label: const Text('Clear without saving'),
-              ),
+            const Text('Small button: save & next  •  hold 3 sec: choose zikir',
+                style: TextStyle(color: Colors.white, fontSize: 12)),
+            TextButton.icon(
+              onPressed: _count == 0 ? null : _discard,
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('Clear without saving'),
             ),
           ],
         ),
@@ -150,14 +250,131 @@ class _CounterPageState extends State<CounterPage> {
   }
 }
 
+/// Current zikir, its suggested count and the prayer time that is running.
+class InfoCard extends StatelessWidget {
+  final String name;
+  final String target;
+  final String prayer;
+  const InfoCard({super.key, required this.name, required this.target, required this.prayer});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.25),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            name,
+            textAlign: TextAlign.center,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            children: [
+              if (prayer.isNotEmpty)
+                Chip(
+                  avatar: const Icon(Icons.access_time, size: 16),
+                  label: Text(prayer),
+                  visualDensity: VisualDensity.compact,
+                ),
+              if (target.isNotEmpty)
+                Chip(
+                  avatar: const Icon(Icons.flag_outlined, size: 16),
+                  label: Text('সংখ্যা: $target'),
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Pick which zikir a count belongs to, or create a new one.
+class PickCategoryDialog extends StatefulWidget {
+  final List<Category> cats;
+  final int? currentId;
+  const PickCategoryDialog({super.key, required this.cats, this.currentId});
+
+  @override
+  State<PickCategoryDialog> createState() => _PickCategoryDialogState();
+}
+
+class _PickCategoryDialogState extends State<PickCategoryDialog> {
+  bool _adding = false;
+  final _name = TextEditingController();
+
+  Future<void> _add() async {
+    final name = _name.text.trim();
+    if (name.isEmpty) return;
+    final id = await Db.addCategory(name);
+    if (mounted) Navigator.pop(context, id);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Choose zikir'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: _adding
+            ? TextField(
+                controller: _name,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'New zikir name'),
+              )
+            : ListView.builder(
+                shrinkWrap: true,
+                itemCount: widget.cats.length,
+                itemBuilder: (_, i) {
+                  final c = widget.cats[i];
+                  return ListTile(
+                    dense: true,
+                    selected: c.id == widget.currentId,
+                    leading: CircleAvatar(radius: 12, child: Text('${i + 1}')),
+                    title: Text(c.name),
+                    subtitle: c.target.isEmpty ? null : Text('সংখ্যা: ${c.target}'),
+                    onTap: () => Navigator.pop(context, c.id),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        if (_adding)
+          FilledButton(onPressed: _add, child: const Text('Add'))
+        else
+          TextButton(onPressed: () => setState(() => _adding = true), child: const Text('+ New')),
+      ],
+    );
+  }
+}
+
 /// A finger-tally counter: blue body, LCD display, big metal button to count,
-/// small metal button (top right) to reset & save.
+/// small metal button (top right) to save & go to the next zikir.
 class CounterDevice extends StatelessWidget {
   final int count;
   final VoidCallback onTap;
   final VoidCallback onReset;
-  const CounterDevice(
-      {super.key, required this.count, required this.onTap, required this.onReset});
+  final VoidCallback onHold;
+  const CounterDevice({
+    super.key,
+    required this.count,
+    required this.onTap,
+    required this.onReset,
+    required this.onHold,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -226,12 +443,12 @@ class CounterDevice extends StatelessWidget {
           Positioned(
             top: 190,
             right: 40,
-            child: MetalButton(size: 44, onTap: onReset),
+            child: MetalButton(size: 44, onTap: onReset, onHold: onHold),
           ),
           // Big count button
           Positioned(
             bottom: 50,
-            child: MetalButton(size: 200, onTap: onTap, ridged: true),
+            child: MetalButton(size: 200, onTap: onTap),
           ),
         ],
       ),
@@ -242,8 +459,8 @@ class CounterDevice extends StatelessWidget {
 class MetalButton extends StatefulWidget {
   final double size;
   final VoidCallback onTap;
-  final bool ridged;
-  const MetalButton({super.key, required this.size, required this.onTap, this.ridged = false});
+  final VoidCallback? onHold; // fires after holding for 3 seconds
+  const MetalButton({super.key, required this.size, required this.onTap, this.onHold});
 
   @override
   State<MetalButton> createState() => _MetalButtonState();
@@ -251,15 +468,44 @@ class MetalButton extends StatefulWidget {
 
 class _MetalButtonState extends State<MetalButton> {
   bool _down = false;
+  bool _held = false;
+  Timer? _timer;
+
+  void _release() {
+    _timer?.cancel();
+    setState(() => _down = false);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final s = widget.size;
+    final ridged = widget.onHold == null;
     return GestureDetector(
-      onTapDown: (_) => setState(() => _down = true),
-      onTapUp: (_) => setState(() => _down = false),
-      onTapCancel: () => setState(() => _down = false),
-      onTap: widget.onTap,
+      onTapDown: (_) {
+        setState(() => _down = true);
+        _held = false;
+        if (widget.onHold != null) {
+          _timer = Timer(const Duration(seconds: 3), () {
+            _held = true;
+            widget.onHold!();
+          });
+        }
+      },
+      onTapUp: (_) => _release(),
+      onTapCancel: _release,
+      onTap: () {
+        if (_held) {
+          _held = false;
+          return;
+        }
+        widget.onTap();
+      },
       child: AnimatedScale(
         scale: _down ? 0.94 : 1,
         duration: const Duration(milliseconds: 60),
@@ -279,7 +525,7 @@ class _MetalButtonState extends State<MetalButton> {
           child: Container(
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              gradient: widget.ridged
+              gradient: ridged
                   ? const SweepGradient(colors: [
                       Color(0xFFEDEDED),
                       Color(0xFF9A9A9A),
@@ -291,276 +537,10 @@ class _MetalButtonState extends State<MetalButton> {
                       Color(0xFF8A8A8A),
                       Color(0xFFEDEDED),
                     ])
-                  : const RadialGradient(
-                      colors: [Color(0xFFF2F2F2), Color(0xFF9E9E9E)]),
+                  : const RadialGradient(colors: [Color(0xFFF2F2F2), Color(0xFF9E9E9E)]),
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class SaveDialog extends StatefulWidget {
-  final int count;
-  const SaveDialog({super.key, required this.count});
-
-  @override
-  State<SaveDialog> createState() => _SaveDialogState();
-}
-
-class _SaveDialogState extends State<SaveDialog> {
-  static const _newKey = -1;
-  List<Category> _cats = [];
-  int? _selected;
-  final _name = TextEditingController();
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final cats = await Db.categories();
-    final p = await SharedPreferences.getInstance();
-    final last = p.getInt('lastCategory');
-    setState(() {
-      _cats = cats;
-      _selected = cats.any((c) => c.id == last)
-          ? last
-          : (cats.isEmpty ? _newKey : cats.first.id);
-      _loading = false;
-    });
-  }
-
-  Future<void> _save() async {
-    int id;
-    if (_selected == _newKey) {
-      final name = _name.text.trim();
-      if (name.isEmpty) return;
-      final existing = _cats.where((c) => c.name.toLowerCase() == name.toLowerCase());
-      id = existing.isNotEmpty ? existing.first.id : await Db.addCategory(name);
-    } else {
-      id = _selected!;
-    }
-    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    await Db.saveCount(id, today, widget.count);
-    (await SharedPreferences.getInstance()).setInt('lastCategory', id);
-    if (mounted) Navigator.pop(context, true);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('Save ${widget.count} to...'),
-      content: _loading
-          ? const SizedBox(height: 60, child: Center(child: CircularProgressIndicator()))
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<int>(
-                  initialValue: _selected,
-                  decoration: const InputDecoration(labelText: 'Category'),
-                  items: [
-                    ..._cats.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))),
-                    const DropdownMenuItem(value: _newKey, child: Text('+ New category')),
-                  ],
-                  onChanged: (v) => setState(() => _selected = v),
-                ),
-                if (_selected == _newKey)
-                  TextField(
-                    controller: _name,
-                    autofocus: true,
-                    decoration: const InputDecoration(labelText: 'New category name'),
-                  ),
-              ],
-            ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-        FilledButton(onPressed: _loading ? null : _save, child: const Text('Save')),
-      ],
-    );
-  }
-}
-
-String _fmt(int n) => NumberFormat.decimalPattern().format(n);
-
-class SummaryPage extends StatefulWidget {
-  const SummaryPage({super.key});
-
-  @override
-  State<SummaryPage> createState() => _SummaryPageState();
-}
-
-class _SummaryPageState extends State<SummaryPage> {
-  List<Category> _cats = [];
-  int _total = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final cats = await Db.categories();
-    final total = await Db.grandTotal();
-    setState(() {
-      _cats = cats;
-      _total = total;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Scaffold(
-      appBar: AppBar(title: const Text('Summary')),
-      body: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            margin: const EdgeInsets.all(16),
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-                color: cs.primaryContainer, borderRadius: BorderRadius.circular(16)),
-            child: Text('Total DHIKRS = ${_fmt(_total)}',
-                textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .titleLarge
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-          ),
-          Expanded(
-            child: _cats.isEmpty
-                ? const Center(child: Text('No categories yet. Count and reset to save.'))
-                : ListView(
-                    children: _cats
-                        .map((c) => ListTile(
-                              title: Text(c.name),
-                              trailing: Text(_fmt(c.total),
-                                  style: const TextStyle(
-                                      fontSize: 18, fontWeight: FontWeight.bold)),
-                              onTap: () async {
-                                await Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                        builder: (_) => CategoryPage(category: c)));
-                                _load();
-                              },
-                            ))
-                        .toList(),
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class CategoryPage extends StatefulWidget {
-  final Category category;
-  const CategoryPage({super.key, required this.category});
-
-  @override
-  State<CategoryPage> createState() => _CategoryPageState();
-}
-
-class _CategoryPageState extends State<CategoryPage> {
-  List<DayCount> _days = [];
-  int _total = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final days = await Db.days(widget.category.id);
-    final total = await Db.categoryTotal(widget.category.id);
-    setState(() {
-      _days = days;
-      _total = total;
-    });
-  }
-
-  Future<void> _delete() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: Text('Delete ${widget.category.name}?'),
-        content: const Text('All saved counts in this category will be removed.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete')),
-        ],
-      ),
-    );
-    if (ok == true) {
-      await Db.deleteCategory(widget.category.id);
-      if (mounted) Navigator.pop(context);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final name = widget.category.name;
-    final items = <Widget>[];
-    String? month;
-    int monthSum = 0;
-    // Group by month; days are newest first.
-    final byMonth = <String, List<DayCount>>{};
-    for (final d in _days) {
-      byMonth.putIfAbsent(d.date.substring(0, 7), () => []).add(d);
-    }
-    for (final entry in byMonth.entries) {
-      month = entry.key;
-      monthSum = entry.value.fold(0, (s, d) => s + d.count);
-      final label = DateFormat('MMMM yyyy').format(DateTime.parse('$month-01'));
-      items.add(Container(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
-            Text('Total ${_fmt(monthSum)}',
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-          ],
-        ),
-      ));
-      for (final d in entry.value) {
-        final date = DateFormat('d MMM').format(DateTime.parse(d.date));
-        items.add(ListTile(
-          dense: true,
-          title: Text('$name  $date'),
-          trailing: Text('total count ${_fmt(d.count)}'),
-        ));
-      }
-    }
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(name),
-        actions: [IconButton(icon: const Icon(Icons.delete_outline), onPressed: _delete)],
-      ),
-      body: ListView(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text('Total $name count = ${_fmt(_total)}',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleLarge
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-          ),
-          if (items.isEmpty)
-            const Padding(
-                padding: EdgeInsets.all(16), child: Text('No entries in the last 6 months.')),
-          ...items,
-        ],
       ),
     );
   }
