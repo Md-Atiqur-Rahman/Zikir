@@ -108,12 +108,20 @@ class _CounterPageState extends State<CounterPage> {
     _prefs?.setInt('currentCategory', id);
   }
 
+  bool? _canVibrate;
+  bool _hasAmplitude = false;
+
   Future<void> _vibrateFor(int ms) async {
     if (!_vibrate) return;
-    if (await Vibration.hasVibrator()) {
-      Vibration.vibrate(duration: ms);
+    // look the hardware up once; asking on every tap added delay
+    if (_canVibrate == null) {
+      _canVibrate = await Vibration.hasVibrator();
+      _hasAmplitude = await Vibration.hasAmplitudeControl();
+    }
+    if (_canVibrate == true) {
+      Vibration.vibrate(duration: ms, amplitude: _hasAmplitude ? 255 : -1);
     } else {
-      HapticFeedback.lightImpact();
+      HapticFeedback.mediumImpact();
     }
   }
 
@@ -134,9 +142,10 @@ class _CounterPageState extends State<CounterPage> {
       _vibrateFor(900);
     } else if (c != null && c.beepEvery > 0 && _count % c.beepEvery == 0) {
       if (_sound) Beeper.playInterval();
-      _vibrateFor(150);
+      _vibrateFor(200);
     } else {
-      _vibrateFor(30);
+      // 30 ms was too short for many phone motors to be felt
+      _vibrateFor(60);
     }
   }
 
