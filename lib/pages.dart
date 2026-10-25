@@ -36,7 +36,19 @@ class _SummaryPageState extends State<SummaryPage> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Summary')),
+      appBar: AppBar(
+        title: const Text('Summary'),
+        actions: [
+          IconButton(
+            tooltip: 'Day-wise',
+            icon: const Icon(Icons.calendar_month),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => DayPage(date: DateTime.now())),
+            ),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Container(
@@ -193,6 +205,12 @@ class _CategoryPageState extends State<CategoryPage> {
         items.add(
           ListTile(
             dense: true,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => DayPage(date: DateTime.parse(day.key)),
+              ),
+            ),
             title: Text(
               '$name  ${DateFormat('d MMM').format(DateTime.parse(day.key))}',
               style: const TextStyle(fontWeight: FontWeight.w600),
@@ -245,6 +263,569 @@ class _CategoryPageState extends State<CategoryPage> {
               child: Text('No entries in the last 6 months.'),
             ),
           ...items,
+        ],
+      ),
+    );
+  }
+}
+
+/// Everything saved on one day, with arrows and a calendar to move between days.
+class DayPage extends StatefulWidget {
+  final DateTime date;
+  const DayPage({super.key, required this.date});
+
+  @override
+  State<DayPage> createState() => _DayPageState();
+}
+
+class _DayPageState extends State<DayPage> {
+  late DateTime _date = DateUtils.dateOnly(widget.date);
+  List<DayRow> _rows = [];
+  Map<String, int> _prayerOrder = {};
+  bool _loaded = false;
+
+  DateTime get _today => DateUtils.dateOnly(DateTime.now());
+  DateTime get _oldest => _today.subtract(const Duration(days: 365));
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final rows = await Db.dayRows(ymd(_date));
+    final prayers = await Db.prayers();
+    setState(() {
+      _rows = rows;
+      _prayerOrder = {for (final p in prayers) p.name: p.ord};
+      _loaded = true;
+    });
+  }
+
+  void _go(DateTime d) {
+    _date = d;
+    _load();
+  }
+
+  Future<void> _pick() async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: _oldest,
+      lastDate: _today,
+    );
+    if (d != null) _go(DateUtils.dateOnly(d));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final total = _rows.fold(0, (s, r) => s + r.count);
+
+    // group rows by zikir, keeping queue order
+    final byZikir = <int, List<DayRow>>{};
+    for (final r in _rows) {
+      byZikir.putIfAbsent(r.categoryId, () => []).add(r);
+    }
+
+    final items = <Widget>[];
+    for (final rows in byZikir.values) {
+      rows.sort(
+        (a, b) => (_prayerOrder[a.prayer] ?? 99).compareTo(
+          _prayerOrder[b.prayer] ?? 99,
+        ),
+      );
+      final sum = rows.fold(0, (s, r) => s + r.count);
+      items.add(
+        ListTile(
+          title: Text(
+            rows.first.name,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          trailing: Text(
+            fmt(sum),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+        ),
+      );
+      for (final r in rows.where((r) => r.prayer.isNotEmpty)) {
+        items.add(
+          Padding(
+            padding: const EdgeInsets.only(left: 32, right: 16, bottom: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [Text(r.prayer), Text(fmt(r.count))],
+            ),
+          ),
+        );
+      }
+      items.add(const Divider(height: 1));
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Day-wise')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: 'Previous day',
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: _date.isAfter(_oldest)
+                      ? () => _go(_date.subtract(const Duration(days: 1)))
+                      : null,
+                ),
+                Expanded(
+                  child: TextButton.icon(
+                    onPressed: _pick,
+                    icon: const Icon(Icons.calendar_month),
+                    label: Text(DateFormat('EEE, d MMM yyyy').format(_date)),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Next day',
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: _date.isBefore(_today)
+                      ? () => _go(_date.add(const Duration(days: 1)))
+                      : null,
+                ),
+              ],
+            ),
+          ),
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Text(
+              'Total = ${fmt(total)}   (${byZikir.length} zikir)',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          Expanded(
+            child: !_loaded
+                ? const SizedBox.shrink()
+                : items.isEmpty
+                ? const Center(child: Text('Nothing saved on this day.'))
+                : ListView(children: items),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// First day of the week containing [d]; weeks start on Saturday.
+DateTime weekStart(DateTime d) =>
+    DateUtils.dateOnly(d).subtract(Duration(days: (d.weekday + 1) % 7));
+
+/// A row with a title, a total and a bar showing it against the largest row.
+class _BarTile extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  final int value;
+  final int max;
+  final VoidCallback? onTap;
+  const _BarTile({
+    required this.title,
+    required this.value,
+    required this.max,
+    this.subtitle,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+      elevation: 0,
+      color: cs.surfaceContainerHigh,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    if (subtitle != null)
+                      Text(
+                        subtitle!,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        minHeight: 6,
+                        value: max == 0 ? 0 : value / max,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                fmt(value),
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: onTap == null ? Colors.transparent : cs.outline,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TotalHeader extends StatelessWidget {
+  final String text;
+  const _TotalHeader(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: theme.textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+}
+
+/// All total: every month with its count. Tap a month for its weeks.
+class MonthsPage extends StatefulWidget {
+  const MonthsPage({super.key});
+
+  @override
+  State<MonthsPage> createState() => _MonthsPageState();
+}
+
+class _MonthsPageState extends State<MonthsPage> {
+  List<(String, int)> _months = [];
+  int _total = 0;
+  int _week = 0;
+  int _month = 0;
+  String? _lastDate;
+  int _lastTotal = 0;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final now = DateTime.now();
+    final today = ymd(now);
+    final months = await Db.monthTotals();
+    final total = await Db.grandTotal();
+    final week = await Db.rangeTotal(ymd(weekStart(now)), today);
+    final month = await Db.rangeTotal(
+      ymd(DateTime(now.year, now.month, 1)),
+      today,
+    );
+    final lastDate = await Db.lastDayBefore(today);
+    final lastTotal = lastDate == null ? 0 : await Db.dayTotal(lastDate);
+    setState(() {
+      _months = months;
+      _total = total;
+      _week = week;
+      _month = month;
+      _lastDate = lastDate;
+      _lastTotal = lastTotal;
+      _loaded = true;
+    });
+  }
+
+  Widget _mini(String label, int value, {VoidCallback? onTap}) => Expanded(
+    child: Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+          child: Column(
+            children: [
+              Text(label, style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 2),
+              Text(
+                fmt(value),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final maxValue = _months.fold(0, (m, e) => e.$2 > m ? e.$2 : m);
+    final last = _lastDate == null ? null : DateTime.parse(_lastDate!);
+    return Scaffold(
+      appBar: AppBar(title: const Text('All total')),
+      body: ListView(
+        children: [
+          _TotalHeader('Total DHIKRS = ${fmt(_total)}'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                _mini(
+                  last == null
+                      ? 'Last day'
+                      : 'Last day · ${DateFormat('d MMM').format(last)}',
+                  _lastTotal,
+                  onTap: last == null
+                      ? null
+                      : () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => DayPage(date: last),
+                          ),
+                        ),
+                ),
+                const SizedBox(width: 8),
+                _mini('This week', _week),
+                const SizedBox(width: 8),
+                _mini('This month', _month),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 16, 4),
+            child: Text(
+              'Month-wise  (tap a month for its weeks)',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+          if (_loaded && _months.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(20),
+              child: Text('Nothing saved yet.'),
+            ),
+          for (final m in _months)
+            _BarTile(
+              title: DateFormat('MMMM yyyy')
+                  .format(DateTime.parse('${m.$1}-01')),
+              value: m.$2,
+              max: maxValue,
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => WeeksPage(month: m.$1)),
+              ),
+            ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+}
+
+/// One month split into weeks (Saturday to Friday, clipped to the month).
+class WeeksPage extends StatefulWidget {
+  final String month; // 'yyyy-MM'
+  const WeeksPage({super.key, required this.month});
+
+  @override
+  State<WeeksPage> createState() => _WeeksPageState();
+}
+
+class _Week {
+  final DateTime from;
+  final DateTime to;
+  int total = 0;
+  _Week(this.from, this.to);
+}
+
+class _WeeksPageState extends State<WeeksPage> {
+  List<_Week> _weeks = [];
+  int _total = 0;
+
+  late final DateTime _first = DateTime.parse('${widget.month}-01');
+  // the current month stops at today instead of listing days that haven't happened
+  late final DateTime _last = () {
+    final end = DateTime(_first.year, _first.month + 1, 0);
+    final today = DateUtils.dateOnly(DateTime.now());
+    return end.isAfter(today) ? today : end;
+  }();
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final daily = await Db.dailyTotals(ymd(_first), ymd(_last));
+    final weeks = <_Week>[];
+    var start = _first;
+    while (!start.isAfter(_last)) {
+      var end = weekStart(start).add(const Duration(days: 6));
+      if (end.isAfter(_last)) end = _last;
+      final w = _Week(start, end);
+      for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
+        w.total += daily[ymd(d)] ?? 0;
+      }
+      weeks.add(w);
+      start = end.add(const Duration(days: 1));
+    }
+    setState(() {
+      _weeks = weeks;
+      _total = daily.values.fold(0, (a, b) => a + b);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final maxValue = _weeks.fold(0, (m, w) => w.total > m ? w.total : m);
+    final f = DateFormat('d MMM');
+    final numbered = [
+      for (var i = 0; i < _weeks.length; i++) (i + 1, _weeks[i]),
+    ];
+    return Scaffold(
+      appBar: AppBar(title: Text(DateFormat('MMMM yyyy').format(_first))),
+      body: ListView(
+        children: [
+          _TotalHeader('Month total = ${fmt(_total)}'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 16, 4),
+            child: Text(
+              'Week-wise  (tap a week for its days)',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+          for (final (n, w) in numbered.reversed)
+            _BarTile(
+              title: 'Week $n',
+              subtitle: '${f.format(w.from)} – ${f.format(w.to)}',
+              value: w.total,
+              max: maxValue,
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      DaysListPage(title: 'Week $n', from: w.from, to: w.to),
+                ),
+              ),
+            ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+}
+
+/// The days of one week with their counts; tap a day for its zikirs.
+class DaysListPage extends StatefulWidget {
+  final String title;
+  final DateTime from;
+  final DateTime to;
+  const DaysListPage({
+    super.key,
+    required this.title,
+    required this.from,
+    required this.to,
+  });
+
+  @override
+  State<DaysListPage> createState() => _DaysListPageState();
+}
+
+class _DaysListPageState extends State<DaysListPage> {
+  Map<String, int> _daily = {};
+
+  @override
+  void initState() {
+    super.initState();
+    Db.dailyTotals(
+      ymd(widget.from),
+      ymd(widget.to),
+    ).then((d) => setState(() => _daily = d));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final days = <DateTime>[];
+    for (
+      var d = widget.to;
+      !d.isBefore(widget.from);
+      d = d.subtract(const Duration(days: 1))
+    ) {
+      days.add(d);
+    }
+    final maxValue = _daily.values.fold(0, (m, v) => v > m ? v : m);
+    final total = _daily.values.fold(0, (a, b) => a + b);
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: ListView(
+        children: [
+          _TotalHeader('Week total = ${fmt(total)}'),
+          for (final d in days)
+            _BarTile(
+              title: DateFormat('EEEE').format(d),
+              subtitle: DateFormat('d MMM yyyy').format(d),
+              value: _daily[ymd(d)] ?? 0,
+              max: maxValue,
+              onTap: (_daily[ymd(d)] ?? 0) == 0
+                  ? null
+                  : () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => DayPage(date: d)),
+                    ),
+            ),
+          const SizedBox(height: 16),
         ],
       ),
     );

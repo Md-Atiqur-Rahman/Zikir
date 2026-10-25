@@ -49,6 +49,9 @@ class CounterPage extends StatefulWidget {
   State<CounterPage> createState() => _CounterPageState();
 }
 
+// returned by the prayer chooser for "Auto (by clock)"
+const _autoKey = '__auto__';
+
 class _CounterPageState extends State<CounterPage> {
   int _count = 0;
   bool _vibrate = true;
@@ -56,8 +59,11 @@ class _CounterPageState extends State<CounterPage> {
   SharedPreferences? _prefs;
   List<Category> _cats = [];
   List<Prayer> _prayers = [];
+  int _todaySaved = 0; // saved today, not counting the running count
+  int _allSaved = 0; // saved ever, not counting the running count
   int? _currentId;
   DateTime? _start; // when the running count began; decides date and prayer
+  String? _prayerOverride; // prayer picked by hand for the running count; null = by clock
 
   @override
   void initState() {
@@ -75,6 +81,7 @@ class _CounterPageState extends State<CounterPage> {
       _sound = p.getBool('sound') ?? true;
       _currentId = p.getInt('currentCategory');
       _start = startStr == null ? null : DateTime.tryParse(startStr);
+      _prayerOverride = p.getString('prayerOverride');
     });
     await _reload();
   }
@@ -82,10 +89,15 @@ class _CounterPageState extends State<CounterPage> {
   Future<void> _reload() async {
     final cats = await Db.categories();
     final prayers = await Db.prayers();
+    final today = ymd(DateTime.now());
+    final todaySaved = await Db.dayTotal(today);
+    final allSaved = await Db.grandTotal();
     if (mounted) {
       setState(() {
         _cats = cats;
         _prayers = prayers;
+        _todaySaved = todaySaved;
+        _allSaved = allSaved;
       });
     }
   }
@@ -163,16 +175,59 @@ class _CounterPageState extends State<CounterPage> {
     setState(() {
       _count = 0;
       _start = null;
+      _prayerOverride = null; // back to automatic for the next count
     });
     _prefs?.setInt('count', 0);
     _prefs?.remove('start');
+    _prefs?.remove('prayerOverride');
+  }
+
+  String get _prayerNow =>
+      _prayerOverride ?? prayerAt(_prayers, _start ?? DateTime.now());
+
+  /// Tap on the prayer chip: pick the prayer time by hand, or go back to automatic.
+  Future<void> _choosePrayer() async {
+    final auto = prayerAt(_prayers, _start ?? DateTime.now());
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Choose time (ওয়াক্ত)'),
+        children: [
+          ListTile(
+            leading: const Icon(Icons.schedule),
+            title: const Text('Auto (by clock)'),
+            subtitle: Text(auto.isEmpty ? 'No prayer window now' : auto),
+            selected: _prayerOverride == null,
+            onTap: () => Navigator.pop(ctx, _autoKey),
+          ),
+          for (final p in _prayers)
+            ListTile(
+              title: Text(p.name),
+              selected: _prayerOverride == p.name,
+              onTap: () => Navigator.pop(ctx, p.name),
+            ),
+          ListTile(
+            title: const Text('None'),
+            selected: _prayerOverride == '',
+            onTap: () => Navigator.pop(ctx, ''),
+          ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    setState(() => _prayerOverride = picked == _autoKey ? null : picked);
+    if (_prayerOverride == null) {
+      _prefs?.remove('prayerOverride');
+    } else {
+      _prefs?.setString('prayerOverride', _prayerOverride!);
+    }
   }
 
   /// Saves the running count into [cat] under the prayer window it started in,
   /// then moves on to the next zikir in the list.
   Future<void> _commit(Category cat) async {
     final start = _start ?? DateTime.now();
-    final prayer = prayerAt(_prayers, start);
+    final prayer = _prayerOverride ?? prayerAt(_prayers, start);
     final saved = _count;
     await Db.saveCount(
       cat.id,
@@ -243,7 +298,7 @@ class _CounterPageState extends State<CounterPage> {
   @override
   Widget build(BuildContext context) {
     final cur = _current;
-    final prayer = prayerAt(_prayers, _start ?? DateTime.now());
+    final prayer = _prayerNow;
     return ValueListenableBuilder<ZikirTheme>(
       valueListenable: themeController,
       builder: (context, t, _) => Scaffold(
@@ -295,7 +350,16 @@ class _CounterPageState extends State<CounterPage> {
                 count: _count,
                 goal: cur?.goal ?? 0,
                 prayer: prayer,
+                prayerManual: _prayerOverride != null,
+                onPrayerTap: _choosePrayer,
                 theme: t,
+              ),
+              DayStats(
+                theme: t,
+                today: _todaySaved + _count,
+                all: _allSaved + _count,
+                onToday: () => _open(DayPage(date: DateTime.now())),
+                onAll: () => _open(const MonthsPage()),
               ),
               Expanded(
                 child: Center(
@@ -323,6 +387,7 @@ class _CounterPageState extends State<CounterPage> {
                 icon: const Icon(Icons.delete_outline),
                 label: const Text('Clear without saving'),
               ),
+              CopyrightFooter(theme: t),
             ],
           ),
         ),
@@ -339,6 +404,8 @@ class InfoCard extends StatelessWidget {
   final int count;
   final int goal;
   final String prayer;
+  final bool prayerManual;
+  final VoidCallback onPrayerTap;
   final ZikirTheme theme;
   final VoidCallback onTap;
   const InfoCard({
@@ -350,6 +417,8 @@ class InfoCard extends StatelessWidget {
     required this.count,
     required this.goal,
     required this.prayer,
+    required this.prayerManual,
+    required this.onPrayerTap,
     required this.theme,
   });
 
@@ -409,12 +478,16 @@ class InfoCard extends StatelessWidget {
               Wrap(
                 spacing: 8,
                 children: [
-                  if (prayer.isNotEmpty)
-                    Chip(
-                      avatar: const Icon(Icons.access_time, size: 16),
-                      label: Text(prayer),
-                      visualDensity: VisualDensity.compact,
+                  // always shown so the time can be changed even outside every window
+                  ActionChip(
+                    avatar: Icon(
+                      prayerManual ? Icons.edit : Icons.access_time,
+                      size: 16,
                     ),
+                    label: Text(prayer.isEmpty ? 'সময়: —' : prayer),
+                    onPressed: onPrayerTap,
+                    visualDensity: VisualDensity.compact,
+                  ),
                   if (target.isNotEmpty)
                     Chip(
                       avatar: const Icon(Icons.flag_outlined, size: 16),
@@ -428,6 +501,159 @@ class InfoCard extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Today's and the all-time total; tap one for the details behind it.
+class DayStats extends StatelessWidget {
+  final ZikirTheme theme;
+  final int today;
+  final int all;
+  final VoidCallback onToday;
+  final VoidCallback onAll;
+  const DayStats({
+    super.key,
+    required this.theme,
+    required this.today,
+    required this.all,
+    required this.onToday,
+    required this.onAll,
+  });
+
+  Widget _tile(IconData icon, String label, int value, VoidCallback onTap) {
+    final fg = theme.onBackground;
+    return Expanded(
+      child: Material(
+        color: fg.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: fg.withValues(alpha: 0.18)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(icon, size: 14, color: theme.glowCount),
+                          const SizedBox(width: 4),
+                          Text(
+                            label,
+                            style: TextStyle(
+                              color: fg.withValues(alpha: 0.85),
+                              fontSize: 12,
+                              letterSpacing: 0.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          NumberFormat.decimalPattern().format(value),
+                          style: TextStyle(
+                            color: fg,
+                            fontSize: 26,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: fg.withValues(alpha: 0.7)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          _tile(Icons.today, 'TODAY', today, onToday),
+          const SizedBox(width: 10),
+          _tile(Icons.all_inclusive, 'ALL TOTAL', all, onAll),
+        ],
+      ),
+    );
+  }
+}
+
+/// Copyright line with contact details; tap an item to copy it.
+class CopyrightFooter extends StatelessWidget {
+  final ZikirTheme theme;
+  const CopyrightFooter({super.key, required this.theme});
+
+  static const email = 'atiqur.rahman.himel@gmail.com';
+  static const phone = '01970091221';
+
+  Widget _item(BuildContext context, IconData icon, String text) {
+    final style = TextStyle(
+      color: theme.onBackground.withValues(alpha: 0.85),
+      fontSize: 11,
+    );
+    return InkWell(
+      onTap: () {
+        Clipboard.setData(ClipboardData(text: text));
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text('Copied $text'),
+              duration: const Duration(seconds: 1),
+            ),
+          );
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: style.color),
+            const SizedBox(width: 4),
+            Text(text, style: style),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 14,
+        children: [
+          Text(
+            '© ${DateTime.now().year} Zikir',
+            style: TextStyle(
+              color: theme.onBackground.withValues(alpha: 0.85),
+              fontSize: 11,
+            ),
+          ),
+          _item(context, Icons.email_outlined, email),
+          _item(context, Icons.phone_outlined, phone),
+        ],
       ),
     );
   }

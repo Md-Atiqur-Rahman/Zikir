@@ -23,6 +23,18 @@ class Category {
   String get targetLabel => goal > 0 ? '$goal' : target;
 }
 
+/// One saved row of a given day: which zikir, in which prayer window, how many.
+class DayRow {
+  final int categoryId;
+  final String name;
+  final String prayer;
+  final int count;
+  DayRow(this.categoryId, this.name, this.prayer, this.count);
+}
+
+String ymd(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
 class DayEntry {
   final String date; // yyyy-MM-dd
   final String prayer; // '' when outside every prayer window
@@ -407,6 +419,77 @@ class Db {
       [categoryId],
     );
     return r.first['t'] as int;
+  }
+
+  // ---- day-wise ----
+
+  static Future<List<DayRow>> dayRows(String date) async {
+    final db = await _database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT c.id, c.name, e.prayer, e.count
+      FROM entries e JOIN categories c ON c.id = e.category_id
+      WHERE e.date = ? ORDER BY c.sort_order, c.id''',
+      [date],
+    );
+    return rows
+        .map(
+          (r) => DayRow(
+            r['id'] as int,
+            r['name'] as String,
+            r['prayer'] as String,
+            r['count'] as int,
+          ),
+        )
+        .toList();
+  }
+
+  static Future<int> dayTotal(String date) async {
+    final db = await _database;
+    final r = await db.rawQuery(
+      'SELECT COALESCE(SUM(count), 0) AS t FROM entries WHERE date = ?',
+      [date],
+    );
+    return r.first['t'] as int;
+  }
+
+  /// Total saved from [from] to [to], both inclusive ('yyyy-MM-dd').
+  static Future<int> rangeTotal(String from, String to) async {
+    final db = await _database;
+    final r = await db.rawQuery(
+      'SELECT COALESCE(SUM(count), 0) AS t FROM entries WHERE date >= ? AND date <= ?',
+      [from, to],
+    );
+    return r.first['t'] as int;
+  }
+
+  /// Totals per month ('yyyy-MM'), newest first.
+  static Future<List<(String, int)>> monthTotals() async {
+    final db = await _database;
+    final r = await db.rawQuery(
+      'SELECT substr(date, 1, 7) AS m, SUM(count) AS t FROM entries GROUP BY m ORDER BY m DESC',
+    );
+    return r.map((e) => (e['m'] as String, e['t'] as int)).toList();
+  }
+
+  /// Day totals between [from] and [to] inclusive, keyed by 'yyyy-MM-dd'.
+  static Future<Map<String, int>> dailyTotals(String from, String to) async {
+    final db = await _database;
+    final r = await db.rawQuery(
+      'SELECT date, SUM(count) AS t FROM entries WHERE date >= ? AND date <= ? GROUP BY date',
+      [from, to],
+    );
+    return {for (final e in r) e['date'] as String: e['t'] as int};
+  }
+
+  /// The most recent day before [date] that has any saved count, or null.
+  static Future<String?> lastDayBefore(String date) async {
+    final db = await _database;
+    final r = await db.rawQuery(
+      'SELECT MAX(date) AS d FROM entries WHERE date < ?',
+      [date],
+    );
+    return r.first['d'] as String?;
   }
 
   // ---- prayers ----
