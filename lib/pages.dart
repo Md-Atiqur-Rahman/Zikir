@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import 'db.dart';
@@ -274,7 +275,12 @@ class _ZikirListPageState extends State<ZikirListPage> {
 
   Future<void> _edit([Category? c]) async {
     final name = TextEditingController(text: c?.name);
-    final target = TextEditingController(text: c?.target);
+    final goal = TextEditingController(
+      text: (c?.goal ?? 0) > 0 ? '${c!.goal}' : '',
+    );
+    final beep = TextEditingController(
+      text: (c?.beepEvery ?? 0) > 0 ? '${c!.beepEvery}' : '',
+    );
     final meaning = TextEditingController(text: c?.meaning);
     final ok = await showDialog<bool>(
       context: context,
@@ -299,10 +305,23 @@ class _ZikirListPageState extends State<ZikirListPage> {
                 ),
               ),
               TextField(
-                controller: target,
+                controller: goal,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: InputDecoration(
+                  labelText: 'Target count (optional)',
+                  hintText: 'e.g. 100',
+                  helperText: 'Beep + long vibration when you reach it',
+                ),
+              ),
+              TextField(
+                controller: beep,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 decoration: const InputDecoration(
-                  labelText: 'Suggested count (optional)',
-                  hintText: 'e.g. 100 or 1-100',
+                  labelText: 'Beep every (optional)',
+                  hintText: 'e.g. 20',
+                  helperText: 'A short beep after every N counts',
                 ),
               ),
             ],
@@ -321,14 +340,27 @@ class _ZikirListPageState extends State<ZikirListPage> {
       ),
     );
     if (ok == true && name.text.trim().isNotEmpty) {
+      final g = int.tryParse(goal.text) ?? 0;
+      final b = int.tryParse(beep.text) ?? 0;
       if (c == null) {
         await Db.addCategory(
           name.text,
-          target: target.text,
+          target: g > 0 ? '$g' : '',
           meaning: meaning.text,
+          goal: g,
+          beepEvery: b,
         );
       } else {
-        await Db.updateCategory(c.id, name.text, target.text, meaning.text);
+        // keep a non-numeric note like "1-100" when no numeric goal is set
+        final note = int.tryParse(c.target) == null ? c.target : '';
+        await Db.updateCategory(
+          c.id,
+          name.text,
+          g > 0 ? '$g' : note,
+          meaning.text,
+          g,
+          b,
+        );
       }
       _load();
     }
@@ -391,12 +423,14 @@ class _ZikirListPageState extends State<ZikirListPage> {
                   key: ValueKey(c.id),
                   leading: CircleAvatar(radius: 14, child: Text('${i + 1}')),
                   title: Text(c.name),
-                  subtitle: (c.meaning.isEmpty && c.target.isEmpty)
+                  subtitle: (c.meaning.isEmpty && c.targetLabel.isEmpty)
                       ? null
                       : Text(
                           [
                             if (c.meaning.isNotEmpty) c.meaning,
-                            if (c.target.isNotEmpty) 'সংখ্যা: ${c.target}',
+                            if (c.targetLabel.isNotEmpty)
+                              'সংখ্যা: ${c.targetLabel}'
+                                  '${c.beepEvery > 0 ? '  •  প্রতি ${c.beepEvery} বারে বিপ' : ''}',
                           ].join('\n'),
                         ),
                   onTap: () => _edit(c),

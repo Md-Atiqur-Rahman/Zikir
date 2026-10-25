@@ -6,8 +6,21 @@ class Category {
   final String name;
   final String target; // suggested count, free text like "100" or "1-100"
   final String meaning; // Bangla meaning shown under the zikir
+  final int goal; // target count; 0 = none
+  final int beepEvery; // beep every N counts; 0 = never
   final int total;
-  Category(this.id, this.name, this.target, this.meaning, this.total);
+  Category(
+    this.id,
+    this.name,
+    this.target,
+    this.meaning,
+    this.goal,
+    this.beepEvery,
+    this.total,
+  );
+
+  /// What to show as the suggested count: the numeric goal, else the free-text note.
+  String get targetLabel => goal > 0 ? '$goal' : target;
 }
 
 class DayEntry {
@@ -93,6 +106,9 @@ const _defaultMeanings = <String, String>{
   'রাব্বি আন্নি মাসসানিয়াদ দুররু ওয়া আনতা আরহামুর রাহিমিন': 'হে আমার রব, আমাকে কষ্ট স্পর্শ করেছে, আর আপনি সর্বশ্রেষ্ঠ দয়ালু। (সূরা আম্বিয়া ২১:৮৩)',
 };
 
+// Beep every N counts, for the default zikirs that have one.
+const _defaultBeepEvery = <String, int>{'আস্তাগফিরুল্লাহ': 20};
+
 // name, start, end in minutes since midnight
 const _defaultPrayers = <(String, int, int)>[
   ('ফজর', 5 * 60, 7 * 60),
@@ -113,13 +129,15 @@ class Db {
     final path = join(await getDatabasesPath(), 'tasbih.db');
     _db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (db, _) async {
         await db.execute('''CREATE TABLE categories(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL,
         target TEXT NOT NULL DEFAULT '',
         meaning TEXT NOT NULL DEFAULT '',
+        goal INTEGER NOT NULL DEFAULT 0,
+        beep_every INTEGER NOT NULL DEFAULT 0,
         sort_order INTEGER NOT NULL DEFAULT 0)''');
         await _createEntries(db, 'entries');
         await _createPrayers(db);
@@ -137,6 +155,7 @@ class Db {
           await db.execute(
             "ALTER TABLE categories ADD COLUMN meaning TEXT NOT NULL DEFAULT ''",
           );
+          await _addGoalColumns(db);
           await db.execute('UPDATE categories SET sort_order = 100 + id');
           await _createEntries(db, 'entries_new');
           await db.execute(
@@ -147,23 +166,50 @@ class Db {
           await _createPrayers(db);
           await _seedZikirs(db);
           await _seedPrayers(db);
-        } else if (oldVersion < 3) {
-          await db.execute(
-            "ALTER TABLE categories ADD COLUMN meaning TEXT NOT NULL DEFAULT ''",
-          );
-          // fill in meanings for zikirs that came from the default list
-          for (final e in _defaultMeanings.entries) {
-            await db.update(
-              'categories',
-              {'meaning': e.value},
-              where: 'name = ?',
-              whereArgs: [e.key],
+        } else {
+          if (oldVersion < 3) {
+            await db.execute(
+              "ALTER TABLE categories ADD COLUMN meaning TEXT NOT NULL DEFAULT ''",
             );
+            // fill in meanings for zikirs that came from the default list
+            for (final e in _defaultMeanings.entries) {
+              await db.update(
+                'categories',
+                {'meaning': e.value},
+                where: 'name = ?',
+                whereArgs: [e.key],
+              );
+            }
+          }
+          if (oldVersion < 4) {
+            await _addGoalColumns(db);
+            // a plain number in the old suggested-count text becomes the goal
+            await db.execute(
+              "UPDATE categories SET goal = CAST(target AS INTEGER) "
+              "WHERE target != '' AND target NOT GLOB '*[^0-9]*'",
+            );
+            for (final e in _defaultBeepEvery.entries) {
+              await db.update(
+                'categories',
+                {'beep_every': e.value},
+                where: 'name = ?',
+                whereArgs: [e.key],
+              );
+            }
           }
         }
       },
     );
     return _db!;
+  }
+
+  static Future<void> _addGoalColumns(Database db) async {
+    await db.execute(
+      'ALTER TABLE categories ADD COLUMN goal INTEGER NOT NULL DEFAULT 0',
+    );
+    await db.execute(
+      'ALTER TABLE categories ADD COLUMN beep_every INTEGER NOT NULL DEFAULT 0',
+    );
   }
 
   static Future<void> _createEntries(Database db, String table) =>
@@ -188,6 +234,8 @@ class Db {
         'name': z.$1,
         'target': z.$2,
         'meaning': _defaultMeanings[z.$1] ?? '',
+        'goal': int.tryParse(z.$2) ?? 0,
+        'beep_every': _defaultBeepEvery[z.$1] ?? 0,
         'sort_order': i++,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
@@ -211,7 +259,7 @@ class Db {
   static Future<List<Category>> categories() async {
     final db = await _database;
     final rows = await db.rawQuery('''
-      SELECT c.id, c.name, c.target, c.meaning, COALESCE(SUM(e.count), 0) AS total
+      SELECT c.id, c.name, c.target, c.meaning, c.goal, c.beep_every, COALESCE(SUM(e.count), 0) AS total
       FROM categories c LEFT JOIN entries e ON e.category_id = c.id
       GROUP BY c.id ORDER BY c.sort_order, c.id''');
     return rows
@@ -221,6 +269,8 @@ class Db {
             r['name'] as String,
             r['target'] as String,
             r['meaning'] as String,
+            r['goal'] as int,
+            r['beep_every'] as int,
             r['total'] as int,
           ),
         )
@@ -232,6 +282,8 @@ class Db {
     String name, {
     String target = '',
     String meaning = '',
+    int goal = 0,
+    int beepEvery = 0,
   }) async {
     final db = await _database;
     name = name.trim();
@@ -249,6 +301,8 @@ class Db {
       'name': name,
       'target': target.trim(),
       'meaning': meaning.trim(),
+      'goal': goal,
+      'beep_every': beepEvery,
       'sort_order': m.first['n'],
     });
   }
@@ -258,11 +312,19 @@ class Db {
     String name,
     String target,
     String meaning,
+    int goal,
+    int beepEvery,
   ) async {
     final db = await _database;
     await db.update(
       'categories',
-      {'name': name.trim(), 'target': target.trim(), 'meaning': meaning.trim()},
+      {
+        'name': name.trim(),
+        'target': target.trim(),
+        'meaning': meaning.trim(),
+        'goal': goal,
+        'beep_every': beepEvery,
+      },
       where: 'id = ?',
       whereArgs: [id],
       conflictAlgorithm: ConflictAlgorithm.ignore,

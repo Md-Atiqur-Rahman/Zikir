@@ -11,6 +11,7 @@ import 'package:vibration/vibration.dart';
 
 import 'db.dart';
 import 'pages.dart';
+import 'sound.dart';
 import 'theme.dart';
 
 Future<void> main() async {
@@ -18,6 +19,7 @@ Future<void> main() async {
   // sqflite has no web support of its own; use the wasm build there.
   if (kIsWeb) databaseFactory = databaseFactoryFfiWeb;
   await themeController.load();
+  await Beeper.load();
   runApp(const TasbihApp());
 }
 
@@ -50,6 +52,7 @@ class CounterPage extends StatefulWidget {
 class _CounterPageState extends State<CounterPage> {
   int _count = 0;
   bool _vibrate = true;
+  bool _sound = true;
   SharedPreferences? _prefs;
   List<Category> _cats = [];
   List<Prayer> _prayers = [];
@@ -69,6 +72,7 @@ class _CounterPageState extends State<CounterPage> {
     setState(() {
       _count = p.getInt('count') ?? 0;
       _vibrate = p.getBool('vibrate') ?? true;
+      _sound = p.getBool('sound') ?? true;
       _currentId = p.getInt('currentCategory');
       _start = startStr == null ? null : DateTime.tryParse(startStr);
     });
@@ -122,7 +126,23 @@ class _CounterPageState extends State<CounterPage> {
       _count++;
     });
     _prefs?.setInt('count', _count);
-    _vibrateFor(30);
+
+    final c = _current;
+    if (c != null && c.goal > 0 && _count == c.goal) {
+      // goal reached: three beeps and a long vibration
+      if (_sound) Beeper.playDone();
+      _vibrateFor(900);
+    } else if (c != null && c.beepEvery > 0 && _count % c.beepEvery == 0) {
+      if (_sound) Beeper.playInterval();
+      _vibrateFor(150);
+    } else {
+      _vibrateFor(30);
+    }
+  }
+
+  void _toggleSound() {
+    setState(() => _sound = !_sound);
+    _prefs?.setBool('sound', _sound);
   }
 
   void _toggleVibrate() {
@@ -230,6 +250,11 @@ class _CounterPageState extends State<CounterPage> {
               onPressed: _toggleVibrate,
             ),
             IconButton(
+              tooltip: _sound ? 'Sound on' : 'Sound off',
+              icon: Icon(_sound ? Icons.volume_up : Icons.volume_off),
+              onPressed: _toggleSound,
+            ),
+            IconButton(
               tooltip: 'Summary',
               icon: const Icon(Icons.bar_chart),
               onPressed: () => _open(const SummaryPage()),
@@ -238,12 +263,14 @@ class _CounterPageState extends State<CounterPage> {
               onSelected: (v) => _open(switch (v) {
                 0 => const ZikirListPage(),
                 1 => const PrayerTimesPage(),
-                _ => const ThemePage(),
+                2 => const ThemePage(),
+                _ => const SoundPage(),
               }),
               itemBuilder: (_) => const [
                 PopupMenuItem(value: 0, child: Text('জিকিরের তালিকা')),
                 PopupMenuItem(value: 1, child: Text('নামাজের সময়সূচী')),
                 PopupMenuItem(value: 2, child: Text('Theme')),
+                PopupMenuItem(value: 3, child: Text('Sounds')),
               ],
             ),
           ],
@@ -255,7 +282,9 @@ class _CounterPageState extends State<CounterPage> {
                 onTap: _choose,
                 name: cur?.name ?? '',
                 meaning: cur?.meaning ?? '',
-                target: cur?.target ?? '',
+                target: cur?.targetLabel ?? '',
+                count: _count,
+                goal: cur?.goal ?? 0,
                 prayer: prayer,
                 theme: t,
               ),
@@ -298,6 +327,8 @@ class InfoCard extends StatelessWidget {
   final String name;
   final String meaning;
   final String target;
+  final int count;
+  final int goal;
   final String prayer;
   final ZikirTheme theme;
   final VoidCallback onTap;
@@ -307,6 +338,8 @@ class InfoCard extends StatelessWidget {
     required this.name,
     required this.meaning,
     required this.target,
+    required this.count,
+    required this.goal,
     required this.prayer,
     required this.theme,
   });
@@ -376,7 +409,9 @@ class InfoCard extends StatelessWidget {
                   if (target.isNotEmpty)
                     Chip(
                       avatar: const Icon(Icons.flag_outlined, size: 16),
-                      label: Text('সংখ্যা: $target'),
+                      label: Text(
+                        goal > 0 ? 'সংখ্যা: $count / $goal' : 'সংখ্যা: $target',
+                      ),
                       visualDensity: VisualDensity.compact,
                     ),
                 ],
@@ -403,11 +438,20 @@ class _PickCategoryDialogState extends State<PickCategoryDialog> {
   bool _adding = false;
   final _name = TextEditingController();
   final _meaning = TextEditingController();
+  final _goal = TextEditingController();
+  final _beep = TextEditingController();
 
   Future<void> _add() async {
     final name = _name.text.trim();
     if (name.isEmpty) return;
-    final id = await Db.addCategory(name, meaning: _meaning.text);
+    final goal = int.tryParse(_goal.text) ?? 0;
+    final id = await Db.addCategory(
+      name,
+      meaning: _meaning.text,
+      target: goal > 0 ? '$goal' : '',
+      goal: goal,
+      beepEvery: int.tryParse(_beep.text) ?? 0,
+    );
     if (mounted) Navigator.pop(context, id);
   }
 
@@ -436,6 +480,22 @@ class _PickCategoryDialogState extends State<PickCategoryDialog> {
                       labelText: 'অর্থ (meaning, optional)',
                     ),
                   ),
+                  TextField(
+                    controller: _goal,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: const InputDecoration(
+                      labelText: 'Target count (optional)',
+                    ),
+                  ),
+                  TextField(
+                    controller: _beep,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: const InputDecoration(
+                      labelText: 'Beep every (optional)',
+                    ),
+                  ),
                 ],
               )
             : ListView.builder(
@@ -448,9 +508,9 @@ class _PickCategoryDialogState extends State<PickCategoryDialog> {
                     selected: c.id == widget.currentId,
                     leading: CircleAvatar(radius: 12, child: Text('${i + 1}')),
                     title: Text(c.name),
-                    subtitle: c.target.isEmpty
+                    subtitle: c.targetLabel.isEmpty
                         ? null
-                        : Text('সংখ্যা: ${c.target}'),
+                        : Text('সংখ্যা: ${c.targetLabel}'),
                     onTap: () => Navigator.pop(context, c.id),
                   );
                 },
