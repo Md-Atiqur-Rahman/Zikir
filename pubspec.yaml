@@ -39,6 +39,7 @@ dependencies:
   shared_preferences: ^2.5.6
   vibration: ^3.2.1
   intl: ^0.20.3
+  sqflite_common_ffi_web: ^1.2.0
 
 dev_dependencies:
   flutter_test:

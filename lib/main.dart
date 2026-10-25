@@ -1,29 +1,43 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite/sqflite.dart' show databaseFactory;
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:vibration/vibration.dart';
 
 import 'db.dart';
 import 'pages.dart';
+import 'theme.dart';
 
-void main() => runApp(const TasbihApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // sqflite has no web support of its own; use the wasm build there.
+  if (kIsWeb) databaseFactory = databaseFactoryFfiWeb;
+  await themeController.load();
+  runApp(const TasbihApp());
+}
 
 class TasbihApp extends StatelessWidget {
   const TasbihApp({super.key});
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        title: 'Zikir',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorSchemeSeed: Colors.teal,
-          useMaterial3: true,
-        ),
-        home: const CounterPage(),
-      );
+  Widget build(BuildContext context) => ValueListenableBuilder<ZikirTheme>(
+    valueListenable: themeController,
+    builder: (_, t, _) => MaterialApp(
+      title: 'Zikir',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorSchemeSeed: t.bodyB,
+        brightness: t.dark ? Brightness.dark : Brightness.light,
+        useMaterial3: true,
+      ),
+      home: const CounterPage(),
+    ),
+  );
 }
 
 class CounterPage extends StatefulWidget {
@@ -74,7 +88,10 @@ class _CounterPageState extends State<CounterPage> {
 
   Category? get _current {
     if (_cats.isEmpty) return null;
-    return _cats.firstWhere((c) => c.id == _currentId, orElse: () => _cats.first);
+    return _cats.firstWhere(
+      (c) => c.id == _currentId,
+      orElse: () => _cats.first,
+    );
   }
 
   Category _nextAfter(int id) {
@@ -128,7 +145,12 @@ class _CounterPageState extends State<CounterPage> {
     final start = _start ?? DateTime.now();
     final prayer = prayerAt(_prayers, start);
     final saved = _count;
-    await Db.saveCount(cat.id, DateFormat('yyyy-MM-dd').format(start), prayer, saved);
+    await Db.saveCount(
+      cat.id,
+      DateFormat('yyyy-MM-dd').format(start),
+      prayer,
+      saved,
+    );
     final next = _nextAfter(cat.id);
     _setCurrent(next.id);
     _clearSession();
@@ -136,10 +158,13 @@ class _CounterPageState extends State<CounterPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        content: Text(
-            'Saved $saved → ${cat.name}${prayer.isEmpty ? '' : ' ($prayer)'}\nNext: ${next.name}'),
-      ));
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            'Saved $saved → ${cat.name}${prayer.isEmpty ? '' : ' ($prayer)'}\nNext: ${next.name}',
+          ),
+        ),
+      );
   }
 
   Future<void> _reset() async {
@@ -172,8 +197,14 @@ class _CounterPageState extends State<CounterPage> {
         title: const Text('Clear without saving?'),
         content: Text('The count of $_count will be lost.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Clear')),
+          TextButton(
+            onPressed: () => Navigator.pop(c, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Clear'),
+          ),
         ],
       ),
     );
@@ -189,61 +220,77 @@ class _CounterPageState extends State<CounterPage> {
   Widget build(BuildContext context) {
     final cur = _current;
     final prayer = prayerAt(_prayers, _start ?? DateTime.now());
-    return Scaffold(
-      backgroundColor: const Color(0xFF5AB0FF),
-      appBar: AppBar(
-        title: const Text('Zikir'),
-        backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            tooltip: _vibrate ? 'Vibration on' : 'Vibration off',
-            icon: Icon(_vibrate ? Icons.vibration : Icons.mobile_off),
-            onPressed: _toggleVibrate,
-          ),
-          IconButton(
-            tooltip: 'Summary',
-            icon: const Icon(Icons.bar_chart),
-            onPressed: () => _open(const SummaryPage()),
-          ),
-          PopupMenuButton<int>(
-            onSelected: (v) => _open(v == 0 ? const ZikirListPage() : const PrayerTimesPage()),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 0, child: Text('জিকিরের তালিকা')),
-              PopupMenuItem(value: 1, child: Text('নামাজের সময়সূচী')),
-            ],
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            InfoCard(name: cur?.name ?? '', target: cur?.target ?? '', prayer: prayer),
-            Expanded(
-              child: Center(
-                child: FittedBox(
-                  fit: BoxFit.contain,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: CounterDevice(
-                      count: _count,
-                      onTap: _tap,
-                      onReset: _reset,
-                      onHold: _choose,
+    return ValueListenableBuilder<ZikirTheme>(
+      valueListenable: themeController,
+      builder: (context, t, _) => Scaffold(
+        backgroundColor: t.background,
+        appBar: AppBar(
+          title: const Text('Zikir'),
+          backgroundColor: Colors.transparent,
+          foregroundColor: t.onBackground,
+          actions: [
+            IconButton(
+              tooltip: _vibrate ? 'Vibration on' : 'Vibration off',
+              icon: Icon(_vibrate ? Icons.vibration : Icons.mobile_off),
+              onPressed: _toggleVibrate,
+            ),
+            IconButton(
+              tooltip: 'Summary',
+              icon: const Icon(Icons.bar_chart),
+              onPressed: () => _open(const SummaryPage()),
+            ),
+            PopupMenuButton<int>(
+              onSelected: (v) => _open(switch (v) {
+                0 => const ZikirListPage(),
+                1 => const PrayerTimesPage(),
+                _ => const ThemePage(),
+              }),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 0, child: Text('জিকিরের তালিকা')),
+                PopupMenuItem(value: 1, child: Text('নামাজের সময়সূচী')),
+                PopupMenuItem(value: 2, child: Text('Theme')),
+              ],
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              InfoCard(
+                name: cur?.name ?? '',
+                target: cur?.target ?? '',
+                prayer: prayer,
+                theme: t,
+              ),
+              Expanded(
+                child: Center(
+                  child: FittedBox(
+                    fit: BoxFit.contain,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: CounterDevice(
+                        count: _count,
+                        onTap: _tap,
+                        onReset: _reset,
+                        onHold: _choose,
+                        theme: t,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            const Text('Small button: save & next  •  hold 3 sec: choose zikir',
-                style: TextStyle(color: Colors.white, fontSize: 12)),
-            TextButton.icon(
-              onPressed: _count == 0 ? null : _discard,
-              style: TextButton.styleFrom(foregroundColor: Colors.white),
-              icon: const Icon(Icons.delete_outline),
-              label: const Text('Clear without saving'),
-            ),
-          ],
+              Text(
+                'Small button: save & next  •  hold 3 sec: choose zikir',
+                style: TextStyle(color: t.onBackground, fontSize: 12),
+              ),
+              TextButton.icon(
+                onPressed: _count == 0 ? null : _discard,
+                style: TextButton.styleFrom(foregroundColor: t.onBackground),
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Clear without saving'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -255,7 +302,14 @@ class InfoCard extends StatelessWidget {
   final String name;
   final String target;
   final String prayer;
-  const InfoCard({super.key, required this.name, required this.target, required this.prayer});
+  final ZikirTheme theme;
+  const InfoCard({
+    super.key,
+    required this.name,
+    required this.target,
+    required this.prayer,
+    required this.theme,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -264,7 +318,7 @@ class InfoCard extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.25),
+        color: theme.onBackground.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -275,7 +329,11 @@ class InfoCard extends StatelessWidget {
             textAlign: TextAlign.center,
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: theme.onBackground,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 6),
           Wrap(
@@ -344,18 +402,26 @@ class _PickCategoryDialogState extends State<PickCategoryDialog> {
                     selected: c.id == widget.currentId,
                     leading: CircleAvatar(radius: 12, child: Text('${i + 1}')),
                     title: Text(c.name),
-                    subtitle: c.target.isEmpty ? null : Text('সংখ্যা: ${c.target}'),
+                    subtitle: c.target.isEmpty
+                        ? null
+                        : Text('সংখ্যা: ${c.target}'),
                     onTap: () => Navigator.pop(context, c.id),
                   );
                 },
               ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
         if (_adding)
           FilledButton(onPressed: _add, child: const Text('Add'))
         else
-          TextButton(onPressed: () => setState(() => _adding = true), child: const Text('+ New')),
+          TextButton(
+            onPressed: () => setState(() => _adding = true),
+            child: const Text('+ New'),
+          ),
       ],
     );
   }
@@ -368,12 +434,14 @@ class CounterDevice extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onReset;
   final VoidCallback onHold;
+  final ZikirTheme theme;
   const CounterDevice({
     super.key,
     required this.count,
     required this.onTap,
     required this.onReset,
     required this.onHold,
+    required this.theme,
   });
 
   @override
@@ -393,13 +461,17 @@ class CounterDevice extends StatelessWidget {
                 bottomLeft: Radius.circular(150),
                 bottomRight: Radius.circular(150),
               ),
-              gradient: const LinearGradient(
+              gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFF1E88E5), Color(0xFF0D47A1), Color(0xFF08306B)],
+                colors: [theme.bodyA, theme.bodyB, theme.bodyC],
               ),
               boxShadow: const [
-                BoxShadow(color: Colors.black38, blurRadius: 18, offset: Offset(0, 10)),
+                BoxShadow(
+                  color: Colors.black38,
+                  blurRadius: 18,
+                  offset: Offset(0, 10),
+                ),
               ],
             ),
           ),
@@ -412,14 +484,14 @@ class CounterDevice extends StatelessWidget {
               height: 120,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFF111111),
+                color: theme.bezel,
                 borderRadius: BorderRadius.circular(26),
               ),
               child: Container(
                 alignment: Alignment.centerRight,
                 padding: const EdgeInsets.symmetric(horizontal: 14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFB9C1B4),
+                  color: theme.lcdBg,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.black54, width: 2),
                 ),
@@ -427,12 +499,12 @@ class CounterDevice extends StatelessWidget {
                   fit: BoxFit.scaleDown,
                   child: Text(
                     '$count',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'monospace',
                       fontSize: 64,
                       fontWeight: FontWeight.w900,
                       fontStyle: FontStyle.italic,
-                      color: Color(0xFF1B1B1B),
+                      color: theme.lcdText,
                     ),
                   ),
                 ),
@@ -443,12 +515,17 @@ class CounterDevice extends StatelessWidget {
           Positioned(
             top: 190,
             right: 40,
-            child: MetalButton(size: 44, onTap: onReset, onHold: onHold),
+            child: MetalButton(
+              size: 44,
+              onTap: onReset,
+              onHold: onHold,
+              glow: theme.glowReset,
+            ),
           ),
           // Big count button
           Positioned(
             bottom: 50,
-            child: MetalButton(size: 200, onTap: onTap),
+            child: MetalButton(size: 200, onTap: onTap, glow: theme.glowCount),
           ),
         ],
       ),
@@ -460,7 +537,14 @@ class MetalButton extends StatefulWidget {
   final double size;
   final VoidCallback onTap;
   final VoidCallback? onHold; // fires after holding for 3 seconds
-  const MetalButton({super.key, required this.size, required this.onTap, this.onHold});
+  final Color glow; // neon colour shown while pressed
+  const MetalButton({
+    super.key,
+    required this.size,
+    required this.onTap,
+    required this.glow,
+    this.onHold,
+  });
 
   @override
   State<MetalButton> createState() => _MetalButtonState();
@@ -468,17 +552,32 @@ class MetalButton extends StatefulWidget {
 
 class _MetalButtonState extends State<MetalButton> {
   bool _down = false;
+  bool _lit = false;
   bool _held = false;
   Timer? _timer;
+  Timer? _glowTimer;
+
+  void _press() {
+    _glowTimer?.cancel();
+    setState(() {
+      _down = true;
+      _lit = true;
+    });
+  }
 
   void _release() {
     _timer?.cancel();
     setState(() => _down = false);
+    // keep the light on briefly so a quick tap still visibly flashes
+    _glowTimer = Timer(const Duration(milliseconds: 220), () {
+      if (mounted) setState(() => _lit = false);
+    });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _glowTimer?.cancel();
     super.dispose();
   }
 
@@ -488,7 +587,7 @@ class _MetalButtonState extends State<MetalButton> {
     final ridged = widget.onHold == null;
     return GestureDetector(
       onTapDown: (_) {
-        setState(() => _down = true);
+        _press();
         _held = false;
         if (widget.onHold != null) {
           _timer = Timer(const Duration(seconds: 3), () {
@@ -509,35 +608,58 @@ class _MetalButtonState extends State<MetalButton> {
       child: AnimatedScale(
         scale: _down ? 0.94 : 1,
         duration: const Duration(milliseconds: 60),
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
           width: s,
           height: s,
           padding: EdgeInsets.all(s * 0.05),
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: LinearGradient(
+            gradient: const LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [Color(0xFFF5F5F5), Color(0xFF7A7A7A)],
             ),
-            boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 8, offset: Offset(0, 4))],
+            boxShadow: [
+              const BoxShadow(
+                color: Colors.black45,
+                blurRadius: 8,
+                offset: Offset(0, 4),
+              ),
+              if (_lit) ...[
+                BoxShadow(
+                  color: widget.glow,
+                  blurRadius: s * 0.15,
+                  spreadRadius: s * 0.03,
+                ),
+                BoxShadow(
+                  color: widget.glow.withValues(alpha: 0.6),
+                  blurRadius: s * 0.4,
+                  spreadRadius: s * 0.08,
+                ),
+              ],
+            ],
           ),
           child: Container(
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: ridged
-                  ? const SweepGradient(colors: [
-                      Color(0xFFEDEDED),
-                      Color(0xFF9A9A9A),
-                      Color(0xFFF8F8F8),
-                      Color(0xFF8A8A8A),
-                      Color(0xFFEDEDED),
-                      Color(0xFF9A9A9A),
-                      Color(0xFFF8F8F8),
-                      Color(0xFF8A8A8A),
-                      Color(0xFFEDEDED),
-                    ])
-                  : const RadialGradient(colors: [Color(0xFFF2F2F2), Color(0xFF9E9E9E)]),
+                  ? const SweepGradient(
+                      colors: [
+                        Color(0xFFEDEDED),
+                        Color(0xFF9A9A9A),
+                        Color(0xFFF8F8F8),
+                        Color(0xFF8A8A8A),
+                        Color(0xFFEDEDED),
+                        Color(0xFF9A9A9A),
+                        Color(0xFFF8F8F8),
+                        Color(0xFF8A8A8A),
+                        Color(0xFFEDEDED),
+                      ],
+                    )
+                  : const RadialGradient(
+                      colors: [Color(0xFFF2F2F2), Color(0xFF9E9E9E)],
+                    ),
             ),
           ),
         ),

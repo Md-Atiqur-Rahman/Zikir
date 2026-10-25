@@ -24,8 +24,9 @@ class Prayer {
   Prayer(this.name, this.ord, this.startMin, this.endMin);
 
   /// [m] is minutes since midnight. A window may cross midnight (start > end).
-  bool contains(int m) =>
-      startMin <= endMin ? (m >= startMin && m < endMin) : (m >= startMin || m < endMin);
+  bool contains(int m) => startMin <= endMin
+      ? (m >= startMin && m < endMin)
+      : (m >= startMin || m < endMin);
 }
 
 String prayerAt(List<Prayer> prayers, DateTime t) {
@@ -48,7 +49,10 @@ const _defaultZikirs = <(String, String)>[
   ('রাব্বি ইন্নি লিমা আনজালতা ইলাইয়্যা মিন খাইরিন ফাকির', '1-100'),
   ('সুবহানাল্লাহি ওয়া বিহামদিহি, সুবহানাল্লাহিল আজিম', '1-100'),
   ('লা ইলাহা ইল্লা আনতা সুবহানাকা ইন্নী কুনতু মিনায যলিমীন', '21'),
-  ('আস্তাগফিরুল্লাহ হাল্লাজি লা ইলাহা ইল্লা হুয়াল হাইয়ুল কাইয়ুম ওয়াতুবু ইলাইহি', '21'),
+  (
+    'আস্তাগফিরুল্লাহ হাল্লাজি লা ইলাহা ইল্লা হুয়াল হাইয়ুল কাইয়ুম ওয়াতুবু ইলাইহি',
+    '21',
+  ),
   ('আল্লাহুম্মা সাল্লি আলা মুহাম্মাদিন সাল্লাল্লাহু আলাইহি ওয়াসাল্লাম', ''),
   ('আল্লাহুম্মাগফিরলি', ''),
   ('হাসবুনাল্লাহু ওয়া নি’মাল ওয়াকিল', ''),
@@ -77,42 +81,54 @@ class Db {
   static Future<Database> get _database async {
     if (_db != null) return _db!;
     final path = join(await getDatabasesPath(), 'tasbih.db');
-    _db = await openDatabase(path, version: 2, onCreate: (db, _) async {
-      await db.execute('''CREATE TABLE categories(
+    _db = await openDatabase(
+      path,
+      version: 2,
+      onCreate: (db, _) async {
+        await db.execute('''CREATE TABLE categories(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL,
         target TEXT NOT NULL DEFAULT '',
         sort_order INTEGER NOT NULL DEFAULT 0)''');
-      await _createEntries(db, 'entries');
-      await _createPrayers(db);
-      await _seedZikirs(db);
-      await _seedPrayers(db);
-    }, onUpgrade: (db, oldVersion, _) async {
-      if (oldVersion < 2) {
-        await db.execute("ALTER TABLE categories ADD COLUMN target TEXT NOT NULL DEFAULT ''");
-        await db.execute('ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
-        await db.execute('UPDATE categories SET sort_order = 100 + id');
-        await _createEntries(db, 'entries_new');
-        await db.execute(
-            "INSERT INTO entries_new SELECT category_id, date, '', count FROM entries");
-        await db.execute('DROP TABLE entries');
-        await db.execute('ALTER TABLE entries_new RENAME TO entries');
+        await _createEntries(db, 'entries');
         await _createPrayers(db);
         await _seedZikirs(db);
         await _seedPrayers(db);
-      }
-    });
+      },
+      onUpgrade: (db, oldVersion, _) async {
+        if (oldVersion < 2) {
+          await db.execute(
+            "ALTER TABLE categories ADD COLUMN target TEXT NOT NULL DEFAULT ''",
+          );
+          await db.execute(
+            'ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.execute('UPDATE categories SET sort_order = 100 + id');
+          await _createEntries(db, 'entries_new');
+          await db.execute(
+            "INSERT INTO entries_new SELECT category_id, date, '', count FROM entries",
+          );
+          await db.execute('DROP TABLE entries');
+          await db.execute('ALTER TABLE entries_new RENAME TO entries');
+          await _createPrayers(db);
+          await _seedZikirs(db);
+          await _seedPrayers(db);
+        }
+      },
+    );
     return _db!;
   }
 
-  static Future<void> _createEntries(Database db, String table) => db.execute('''CREATE TABLE $table(
+  static Future<void> _createEntries(Database db, String table) =>
+      db.execute('''CREATE TABLE $table(
         category_id INTEGER NOT NULL,
         date TEXT NOT NULL,
         prayer TEXT NOT NULL DEFAULT '',
         count INTEGER NOT NULL,
         PRIMARY KEY (category_id, date, prayer))''');
 
-  static Future<void> _createPrayers(Database db) => db.execute('''CREATE TABLE prayers(
+  static Future<void> _createPrayers(Database db) =>
+      db.execute('''CREATE TABLE prayers(
         name TEXT PRIMARY KEY,
         ord INTEGER NOT NULL,
         start_min INTEGER NOT NULL,
@@ -121,16 +137,23 @@ class Db {
   static Future<void> _seedZikirs(Database db) async {
     var i = 1;
     for (final z in _defaultZikirs) {
-      await db.insert('categories', {'name': z.$1, 'target': z.$2, 'sort_order': i++},
-          conflictAlgorithm: ConflictAlgorithm.ignore);
+      await db.insert('categories', {
+        'name': z.$1,
+        'target': z.$2,
+        'sort_order': i++,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
   }
 
   static Future<void> _seedPrayers(Database db) async {
     var i = 0;
     for (final p in _defaultPrayers) {
-      await db.insert('prayers',
-          {'name': p.$1, 'ord': i++, 'start_min': p.$2, 'end_min': p.$3});
+      await db.insert('prayers', {
+        'name': p.$1,
+        'ord': i++,
+        'start_min': p.$2,
+        'end_min': p.$3,
+      });
     }
   }
 
@@ -144,8 +167,14 @@ class Db {
       FROM categories c LEFT JOIN entries e ON e.category_id = c.id
       GROUP BY c.id ORDER BY c.sort_order, c.id''');
     return rows
-        .map((r) => Category(r['id'] as int, r['name'] as String, r['target'] as String,
-            r['total'] as int))
+        .map(
+          (r) => Category(
+            r['id'] as int,
+            r['name'] as String,
+            r['target'] as String,
+            r['total'] as int,
+          ),
+        )
         .toList();
   }
 
@@ -153,27 +182,44 @@ class Db {
   static Future<int> addCategory(String name, {String target = ''}) async {
     final db = await _database;
     name = name.trim();
-    final existing =
-        await db.query('categories', columns: ['id'], where: 'name = ?', whereArgs: [name]);
+    final existing = await db.query(
+      'categories',
+      columns: ['id'],
+      where: 'name = ?',
+      whereArgs: [name],
+    );
     if (existing.isNotEmpty) return existing.first['id'] as int;
-    final m = await db.rawQuery('SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM categories');
-    return db.insert(
-        'categories', {'name': name, 'target': target.trim(), 'sort_order': m.first['n']});
+    final m = await db.rawQuery(
+      'SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM categories',
+    );
+    return db.insert('categories', {
+      'name': name,
+      'target': target.trim(),
+      'sort_order': m.first['n'],
+    });
   }
 
   static Future<void> updateCategory(int id, String name, String target) async {
     final db = await _database;
-    await db.update('categories', {'name': name.trim(), 'target': target.trim()},
-        where: 'id = ?',
-        whereArgs: [id],
-        conflictAlgorithm: ConflictAlgorithm.ignore);
+    await db.update(
+      'categories',
+      {'name': name.trim(), 'target': target.trim()},
+      where: 'id = ?',
+      whereArgs: [id],
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   static Future<void> reorder(List<int> ids) async {
     final db = await _database;
     final batch = db.batch();
     for (var i = 0; i < ids.length; i++) {
-      batch.update('categories', {'sort_order': i + 1}, where: 'id = ?', whereArgs: [ids[i]]);
+      batch.update(
+        'categories',
+        {'sort_order': i + 1},
+        where: 'id = ?',
+        whereArgs: [ids[i]],
+      );
     }
     await batch.commit(noResult: true);
   }
@@ -187,17 +233,26 @@ class Db {
   // ---- entries ----
 
   /// Adds [count] to the category's total for [date] and [prayer].
-  static Future<void> saveCount(int categoryId, String date, String prayer, int count) async {
+  static Future<void> saveCount(
+    int categoryId,
+    String date,
+    String prayer,
+    int count,
+  ) async {
     final db = await _database;
-    await db.rawInsert('''
+    await db.rawInsert(
+      '''
       INSERT INTO entries(category_id, date, prayer, count) VALUES(?, ?, ?, ?)
       ON CONFLICT(category_id, date, prayer) DO UPDATE SET count = count + excluded.count''',
-        [categoryId, date, prayer, count]);
+      [categoryId, date, prayer, count],
+    );
   }
 
   static Future<int> grandTotal() async {
     final db = await _database;
-    final r = await db.rawQuery('SELECT COALESCE(SUM(count), 0) AS t FROM entries');
+    final r = await db.rawQuery(
+      'SELECT COALESCE(SUM(count), 0) AS t FROM entries',
+    );
     return r.first['t'] as int;
   }
 
@@ -207,19 +262,29 @@ class Db {
     final now = DateTime.now();
     final from = DateTime(now.year, now.month - 5, 1);
     final fromStr = '${from.year}-${from.month.toString().padLeft(2, '0')}-01';
-    final rows = await db.query('entries',
-        where: 'category_id = ? AND date >= ?',
-        whereArgs: [categoryId, fromStr],
-        orderBy: 'date DESC');
+    final rows = await db.query(
+      'entries',
+      where: 'category_id = ? AND date >= ?',
+      whereArgs: [categoryId, fromStr],
+      orderBy: 'date DESC',
+    );
     return rows
-        .map((r) => DayEntry(r['date'] as String, r['prayer'] as String, r['count'] as int))
+        .map(
+          (r) => DayEntry(
+            r['date'] as String,
+            r['prayer'] as String,
+            r['count'] as int,
+          ),
+        )
         .toList();
   }
 
   static Future<int> categoryTotal(int categoryId) async {
     final db = await _database;
     final r = await db.rawQuery(
-        'SELECT COALESCE(SUM(count), 0) AS t FROM entries WHERE category_id = ?', [categoryId]);
+      'SELECT COALESCE(SUM(count), 0) AS t FROM entries WHERE category_id = ?',
+      [categoryId],
+    );
     return r.first['t'] as int;
   }
 
@@ -229,14 +294,24 @@ class Db {
     final db = await _database;
     final rows = await db.query('prayers', orderBy: 'ord');
     return rows
-        .map((r) => Prayer(
-            r['name'] as String, r['ord'] as int, r['start_min'] as int, r['end_min'] as int))
+        .map(
+          (r) => Prayer(
+            r['name'] as String,
+            r['ord'] as int,
+            r['start_min'] as int,
+            r['end_min'] as int,
+          ),
+        )
         .toList();
   }
 
   static Future<void> updatePrayer(Prayer p) async {
     final db = await _database;
-    await db.update('prayers', {'start_min': p.startMin, 'end_min': p.endMin},
-        where: 'name = ?', whereArgs: [p.name]);
+    await db.update(
+      'prayers',
+      {'start_min': p.startMin, 'end_min': p.endMin},
+      where: 'name = ?',
+      whereArgs: [p.name],
+    );
   }
 }
