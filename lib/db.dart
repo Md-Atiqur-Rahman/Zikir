@@ -5,8 +5,9 @@ class Category {
   final int id;
   final String name;
   final String target; // suggested count, free text like "100" or "1-100"
+  final String meaning; // Bangla meaning shown under the zikir
   final int total;
-  Category(this.id, this.name, this.target, this.total);
+  Category(this.id, this.name, this.target, this.meaning, this.total);
 }
 
 class DayEntry {
@@ -63,6 +64,35 @@ const _defaultZikirs = <(String, String)>[
   ('রাব্বি আন্নি মাসসানিয়াদ দুররু ওয়া আনতা আরহামুর রাহিমিন', ''),
 ];
 
+// Bangla meaning for each default zikir, keyed by its name.
+const _defaultMeanings = <String, String>{
+  'সুবহানাল্লাহ': 'আল্লাহ পবিত্র।',
+  'আলহামদুলিল্লাহ': 'সকল প্রশংসা আল্লাহর জন্য।',
+  'আল্লাহু আকবার': 'আল্লাহ সবচেয়ে মহান।',
+  'লা ইলাহা ইল্লাল্লাহু': 'আল্লাহ ছাড়া কোনো ইলাহ (উপাস্য) নেই।',
+  'আস্তাগফিরুল্লাহ': 'আমি আল্লাহর কাছে ক্ষমা চাচ্ছি।',
+  'লা হাওলা ওয়ালা কুওয়াতা ইল্লা বিল্লাহিল আলিউল আজিম': 'মহান ও সর্বোচ্চ আল্লাহর সাহায্য ছাড়া (গুনাহ থেকে বাঁচার) কোনো উপায় এবং (ভালো কাজ করার) কোনো শক্তি নেই।',
+  'আস্তাগফিরুল্লাহ ইন্নাল্লাহা গাফুরুর রাহিম': 'আমি আল্লাহর কাছে ক্ষমা চাচ্ছি; নিশ্চয়ই আল্লাহ অত্যন্ত ক্ষমাশীল, পরম দয়ালু।',
+  'আল্লাহুম্মা সাল্লি ওয়া সাল্লিম ‘আলা নাবিয়্যিনা মুহাম্মাদ':
+      'হে আল্লাহ, আমাদের নবী মুহাম্মাদ (সাঃ)-এর উপর রহমত ও শান্তি বর্ষণ করুন।',
+  'রাব্বি ইন্নি লিমা আনজালতা ইলাইয়্যা মিন খাইরিন ফাকির': 'হে আমার রব, আপনি আমার প্রতি যে কল্যাণই নাজিল করবেন, আমি তার মুখাপেক্ষী। (সূরা কাসাস ২৮:২৪)',
+  'সুবহানাল্লাহি ওয়া বিহামদিহি, সুবহানাল্লাহিল আজিম':
+      'আল্লাহ পবিত্র ও তাঁর প্রশংসা করছি; মহান আল্লাহ পবিত্র।',
+  'লা ইলাহা ইল্লা আনতা সুবহানাকা ইন্নী কুনতু মিনায যলিমীন': 'আপনি ছাড়া কোনো ইলাহ নেই, আপনি পবিত্র; নিশ্চয়ই আমি জালিমদের অন্তর্ভুক্ত ছিলাম। (সূরা আম্বিয়া ২১:৮৭)',
+  'আস্তাগফিরুল্লাহ হাল্লাজি লা ইলাহা ইল্লা হুয়াল হাইয়ুল কাইয়ুম ওয়াতুবু ইলাইহি': 'আমি সেই আল্লাহর কাছে ক্ষমা চাচ্ছি, যিনি ছাড়া কোনো ইলাহ নেই; তিনি চিরঞ্জীব, সবকিছুর ধারক; আর আমি তাঁর কাছে তওবা করছি।',
+  'আল্লাহুম্মা সাল্লি আলা মুহাম্মাদিন সাল্লাল্লাহু আলাইহি ওয়াসাল্লাম': 'হে আল্লাহ, মুহাম্মাদ (সাঃ)-এর উপর রহমত বর্ষণ করুন; তাঁর উপর আল্লাহর রহমত ও শান্তি বর্ষিত হোক।',
+  'আল্লাহুম্মাগফিরলি': 'হে আল্লাহ, আমাকে ক্ষমা করুন।',
+  'হাসবুনাল্লাহু ওয়া নি’মাল ওয়াকিল':
+      'আল্লাহই আমাদের জন্য যথেষ্ট, আর তিনিই উত্তম কর্মবিধায়ক।',
+  'ইয়া হাইয়ু ইয়া কাইয়ুম ইয়া জালজালালি ওয়াল ইকরাম':
+      'হে চিরঞ্জীব, হে সবকিছুর ধারক, হে মহিমা ও সম্মানের অধিকারী।',
+  'আল্লাহুম্মার হামনি বিরাহমতিকা ইয়া আরহামার রাহিমিন':
+      'হে আল্লাহ, আপনার রহমতে আমার প্রতি দয়া করুন, হে সর্বশ্রেষ্ঠ দয়ালু।',
+  'সালামুন কাওলাম মির রাব্বির রাহিম': 'পরম দয়ালু রবের পক্ষ থেকে (তাদের উদ্দেশে) বলা হবে ‘সালাম’ (শান্তি)। (সূরা ইয়াসিন ৩৬:৫৮)',
+  'আল্লাহুম্মা খাইরান ফী কুল্লি আমরিন আন্তাজিরুহ': 'হে আল্লাহ, আমি যে বিষয়ের অপেক্ষায় আছি, তার প্রতিটিতে আমাকে কল্যাণ দান করুন।',
+  'রাব্বি আন্নি মাসসানিয়াদ দুররু ওয়া আনতা আরহামুর রাহিমিন': 'হে আমার রব, আমাকে কষ্ট স্পর্শ করেছে, আর আপনি সর্বশ্রেষ্ঠ দয়ালু। (সূরা আম্বিয়া ২১:৮৩)',
+};
+
 // name, start, end in minutes since midnight
 const _defaultPrayers = <(String, int, int)>[
   ('ফজর', 5 * 60, 7 * 60),
@@ -83,12 +113,13 @@ class Db {
     final path = join(await getDatabasesPath(), 'tasbih.db');
     _db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, _) async {
         await db.execute('''CREATE TABLE categories(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL,
         target TEXT NOT NULL DEFAULT '',
+        meaning TEXT NOT NULL DEFAULT '',
         sort_order INTEGER NOT NULL DEFAULT 0)''');
         await _createEntries(db, 'entries');
         await _createPrayers(db);
@@ -103,6 +134,9 @@ class Db {
           await db.execute(
             'ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0',
           );
+          await db.execute(
+            "ALTER TABLE categories ADD COLUMN meaning TEXT NOT NULL DEFAULT ''",
+          );
           await db.execute('UPDATE categories SET sort_order = 100 + id');
           await _createEntries(db, 'entries_new');
           await db.execute(
@@ -113,6 +147,19 @@ class Db {
           await _createPrayers(db);
           await _seedZikirs(db);
           await _seedPrayers(db);
+        } else if (oldVersion < 3) {
+          await db.execute(
+            "ALTER TABLE categories ADD COLUMN meaning TEXT NOT NULL DEFAULT ''",
+          );
+          // fill in meanings for zikirs that came from the default list
+          for (final e in _defaultMeanings.entries) {
+            await db.update(
+              'categories',
+              {'meaning': e.value},
+              where: 'name = ?',
+              whereArgs: [e.key],
+            );
+          }
         }
       },
     );
@@ -140,6 +187,7 @@ class Db {
       await db.insert('categories', {
         'name': z.$1,
         'target': z.$2,
+        'meaning': _defaultMeanings[z.$1] ?? '',
         'sort_order': i++,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
@@ -163,7 +211,7 @@ class Db {
   static Future<List<Category>> categories() async {
     final db = await _database;
     final rows = await db.rawQuery('''
-      SELECT c.id, c.name, c.target, COALESCE(SUM(e.count), 0) AS total
+      SELECT c.id, c.name, c.target, c.meaning, COALESCE(SUM(e.count), 0) AS total
       FROM categories c LEFT JOIN entries e ON e.category_id = c.id
       GROUP BY c.id ORDER BY c.sort_order, c.id''');
     return rows
@@ -172,6 +220,7 @@ class Db {
             r['id'] as int,
             r['name'] as String,
             r['target'] as String,
+            r['meaning'] as String,
             r['total'] as int,
           ),
         )
@@ -179,7 +228,11 @@ class Db {
   }
 
   /// Returns the id of the new category, or of the existing one with the same name.
-  static Future<int> addCategory(String name, {String target = ''}) async {
+  static Future<int> addCategory(
+    String name, {
+    String target = '',
+    String meaning = '',
+  }) async {
     final db = await _database;
     name = name.trim();
     final existing = await db.query(
@@ -195,15 +248,21 @@ class Db {
     return db.insert('categories', {
       'name': name,
       'target': target.trim(),
+      'meaning': meaning.trim(),
       'sort_order': m.first['n'],
     });
   }
 
-  static Future<void> updateCategory(int id, String name, String target) async {
+  static Future<void> updateCategory(
+    int id,
+    String name,
+    String target,
+    String meaning,
+  ) async {
     final db = await _database;
     await db.update(
       'categories',
-      {'name': name.trim(), 'target': target.trim()},
+      {'name': name.trim(), 'target': target.trim(), 'meaning': meaning.trim()},
       where: 'id = ?',
       whereArgs: [id],
       conflictAlgorithm: ConflictAlgorithm.ignore,

@@ -275,26 +275,38 @@ class _ZikirListPageState extends State<ZikirListPage> {
   Future<void> _edit([Category? c]) async {
     final name = TextEditingController(text: c?.name);
     final target = TextEditingController(text: c?.target);
+    final meaning = TextEditingController(text: c?.meaning);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(c == null ? 'Add zikir' : 'Edit zikir'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: name,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: 'Name'),
-            ),
-            TextField(
-              controller: target,
-              decoration: const InputDecoration(
-                labelText: 'Suggested count (optional)',
-                hintText: 'e.g. 100 or 1-100',
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: name,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'Name'),
               ),
-            ),
-          ],
+              TextField(
+                controller: meaning,
+                minLines: 2,
+                maxLines: 5,
+                decoration: const InputDecoration(
+                  labelText: 'অর্থ (meaning)',
+                  hintText: 'Shown under the zikir on the counter',
+                ),
+              ),
+              TextField(
+                controller: target,
+                decoration: const InputDecoration(
+                  labelText: 'Suggested count (optional)',
+                  hintText: 'e.g. 100 or 1-100',
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -310,9 +322,13 @@ class _ZikirListPageState extends State<ZikirListPage> {
     );
     if (ok == true && name.text.trim().isNotEmpty) {
       if (c == null) {
-        await Db.addCategory(name.text, target: target.text);
+        await Db.addCategory(
+          name.text,
+          target: target.text,
+          meaning: meaning.text,
+        );
       } else {
-        await Db.updateCategory(c.id, name.text, target.text);
+        await Db.updateCategory(c.id, name.text, target.text, meaning.text);
       }
       _load();
     }
@@ -375,9 +391,14 @@ class _ZikirListPageState extends State<ZikirListPage> {
                   key: ValueKey(c.id),
                   leading: CircleAvatar(radius: 14, child: Text('${i + 1}')),
                   title: Text(c.name),
-                  subtitle: c.target.isEmpty
+                  subtitle: (c.meaning.isEmpty && c.target.isEmpty)
                       ? null
-                      : Text('সংখ্যা: ${c.target}'),
+                      : Text(
+                          [
+                            if (c.meaning.isNotEmpty) c.meaning,
+                            if (c.target.isNotEmpty) 'সংখ্যা: ${c.target}',
+                          ].join('\n'),
+                        ),
                   onTap: () => _edit(c),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,

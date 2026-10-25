@@ -173,21 +173,16 @@ class _CounterPageState extends State<CounterPage> {
     await _commit(cur);
   }
 
-  /// Hold on the reset button: choose the zikir yourself instead of the queue.
+  /// Tap on the zikir card: pick the zikir yourself instead of following the queue.
+  /// The next reset saves into it, then the queue continues from there.
   Future<void> _choose() async {
-    _vibrateFor(80);
     final id = await showDialog<int>(
       context: context,
       builder: (_) => PickCategoryDialog(cats: _cats, currentId: _current?.id),
     );
     if (id == null) return;
     await _reload();
-    final cat = _cats.firstWhere((c) => c.id == id);
-    if (_count == 0) {
-      setState(() => _setCurrent(cat.id));
-    } else {
-      await _commit(cat);
-    }
+    setState(() => _setCurrent(id));
   }
 
   Future<void> _discard() async {
@@ -257,7 +252,9 @@ class _CounterPageState extends State<CounterPage> {
           child: Column(
             children: [
               InfoCard(
+                onTap: _choose,
                 name: cur?.name ?? '',
+                meaning: cur?.meaning ?? '',
                 target: cur?.target ?? '',
                 prayer: prayer,
                 theme: t,
@@ -272,7 +269,6 @@ class _CounterPageState extends State<CounterPage> {
                         count: _count,
                         onTap: _tap,
                         onReset: _reset,
-                        onHold: _choose,
                         theme: t,
                       ),
                     ),
@@ -280,7 +276,7 @@ class _CounterPageState extends State<CounterPage> {
                 ),
               ),
               Text(
-                'Small button: save & next  •  hold 3 sec: choose zikir',
+                'Small button: save & next  •  tap the zikir name to change it',
                 style: TextStyle(color: t.onBackground, fontSize: 12),
               ),
               TextButton.icon(
@@ -300,12 +296,16 @@ class _CounterPageState extends State<CounterPage> {
 /// Current zikir, its suggested count and the prayer time that is running.
 class InfoCard extends StatelessWidget {
   final String name;
+  final String meaning;
   final String target;
   final String prayer;
   final ZikirTheme theme;
+  final VoidCallback onTap;
   const InfoCard({
     super.key,
+    required this.onTap,
     required this.name,
+    required this.meaning,
     required this.target,
     required this.prayer,
     required this.theme,
@@ -313,47 +313,77 @@ class InfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: theme.onBackground.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            name,
-            textAlign: TextAlign.center,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: theme.onBackground,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.34,
+        ),
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: theme.onBackground.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        // long zikirs scroll inside the card instead of squeezing the counter
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              if (prayer.isNotEmpty)
-                Chip(
-                  avatar: const Icon(Icons.access_time, size: 16),
-                  label: Text(prayer),
-                  visualDensity: VisualDensity.compact,
+              // the arrow hints that tapping the card opens the zikir list
+              Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(text: name),
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: Icon(
+                        Icons.arrow_drop_down,
+                        color: theme.onBackground,
+                      ),
+                    ),
+                  ],
                 ),
-              if (target.isNotEmpty)
-                Chip(
-                  avatar: const Icon(Icons.flag_outlined, size: 16),
-                  label: Text('সংখ্যা: $target'),
-                  visualDensity: VisualDensity.compact,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: theme.onBackground,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
                 ),
+              ),
+              if (meaning.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  meaning,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: theme.onBackground.withValues(alpha: 0.85),
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  if (prayer.isNotEmpty)
+                    Chip(
+                      avatar: const Icon(Icons.access_time, size: 16),
+                      label: Text(prayer),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  if (target.isNotEmpty)
+                    Chip(
+                      avatar: const Icon(Icons.flag_outlined, size: 16),
+                      label: Text('সংখ্যা: $target'),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                ],
+              ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -372,11 +402,12 @@ class PickCategoryDialog extends StatefulWidget {
 class _PickCategoryDialogState extends State<PickCategoryDialog> {
   bool _adding = false;
   final _name = TextEditingController();
+  final _meaning = TextEditingController();
 
   Future<void> _add() async {
     final name = _name.text.trim();
     if (name.isEmpty) return;
-    final id = await Db.addCategory(name);
+    final id = await Db.addCategory(name, meaning: _meaning.text);
     if (mounted) Navigator.pop(context, id);
   }
 
@@ -387,10 +418,25 @@ class _PickCategoryDialogState extends State<PickCategoryDialog> {
       content: SizedBox(
         width: double.maxFinite,
         child: _adding
-            ? TextField(
-                controller: _name,
-                autofocus: true,
-                decoration: const InputDecoration(labelText: 'New zikir name'),
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: _name,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: 'New zikir name',
+                    ),
+                  ),
+                  TextField(
+                    controller: _meaning,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'অর্থ (meaning, optional)',
+                    ),
+                  ),
+                ],
               )
             : ListView.builder(
                 shrinkWrap: true,
@@ -433,14 +479,12 @@ class CounterDevice extends StatelessWidget {
   final int count;
   final VoidCallback onTap;
   final VoidCallback onReset;
-  final VoidCallback onHold;
   final ZikirTheme theme;
   const CounterDevice({
     super.key,
     required this.count,
     required this.onTap,
     required this.onReset,
-    required this.onHold,
     required this.theme,
   });
 
@@ -515,17 +559,17 @@ class CounterDevice extends StatelessWidget {
           Positioned(
             top: 190,
             right: 40,
-            child: MetalButton(
-              size: 44,
-              onTap: onReset,
-              onHold: onHold,
-              glow: theme.glowReset,
-            ),
+            child: MetalButton(size: 44, onTap: onReset, glow: theme.glowReset),
           ),
           // Big count button
           Positioned(
             bottom: 50,
-            child: MetalButton(size: 200, onTap: onTap, glow: theme.glowCount),
+            child: MetalButton(
+              size: 200,
+              onTap: onTap,
+              glow: theme.glowCount,
+              ridged: true,
+            ),
           ),
         ],
       ),
@@ -536,14 +580,14 @@ class CounterDevice extends StatelessWidget {
 class MetalButton extends StatefulWidget {
   final double size;
   final VoidCallback onTap;
-  final VoidCallback? onHold; // fires after holding for 3 seconds
   final Color glow; // neon colour shown while pressed
+  final bool ridged; // brushed-metal look for the big button
   const MetalButton({
     super.key,
     required this.size,
     required this.onTap,
     required this.glow,
-    this.onHold,
+    this.ridged = false,
   });
 
   @override
@@ -553,8 +597,6 @@ class MetalButton extends StatefulWidget {
 class _MetalButtonState extends State<MetalButton> {
   bool _down = false;
   bool _lit = false;
-  bool _held = false;
-  Timer? _timer;
   Timer? _glowTimer;
 
   void _press() {
@@ -566,7 +608,6 @@ class _MetalButtonState extends State<MetalButton> {
   }
 
   void _release() {
-    _timer?.cancel();
     setState(() => _down = false);
     // keep the light on briefly so a quick tap still visibly flashes
     _glowTimer = Timer(const Duration(milliseconds: 220), () {
@@ -576,7 +617,6 @@ class _MetalButtonState extends State<MetalButton> {
 
   @override
   void dispose() {
-    _timer?.cancel();
     _glowTimer?.cancel();
     super.dispose();
   }
@@ -584,27 +624,12 @@ class _MetalButtonState extends State<MetalButton> {
   @override
   Widget build(BuildContext context) {
     final s = widget.size;
-    final ridged = widget.onHold == null;
+    final ridged = widget.ridged;
     return GestureDetector(
-      onTapDown: (_) {
-        _press();
-        _held = false;
-        if (widget.onHold != null) {
-          _timer = Timer(const Duration(seconds: 3), () {
-            _held = true;
-            widget.onHold!();
-          });
-        }
-      },
+      onTapDown: (_) => _press(),
       onTapUp: (_) => _release(),
       onTapCancel: _release,
-      onTap: () {
-        if (_held) {
-          _held = false;
-          return;
-        }
-        widget.onTap();
-      },
+      onTap: widget.onTap,
       child: AnimatedScale(
         scale: _down ? 0.94 : 1,
         duration: const Duration(milliseconds: 60),

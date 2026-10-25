@@ -35,8 +35,9 @@ class ZikirTheme {
   bool get dark => background.computeLuminance() < 0.2;
 
   /// Text on the counter screen: white on mid/dark backgrounds, near-black on light ones.
-  Color get onBackground =>
-      background.computeLuminance() < 0.5 ? Colors.white : const Color(0xFF1B1B1B);
+  Color get onBackground => background.computeLuminance() < 0.5
+      ? Colors.white
+      : const Color(0xFF1B1B1B);
 
   ZikirTheme withColor(int index, Color c) {
     final next = [...colors]..[index] = c;
