@@ -10,6 +10,8 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // needed by the ota_update plugin (in-app updates)
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -29,13 +31,36 @@ android {
         versionName = flutter.versionName
     }
 
-    buildTypes {
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+    // Every release must be signed with the SAME key, otherwise Android refuses to install
+    // a new build over the old one (and the user would have to uninstall and lose data).
+    // CI passes the permanent key through these environment variables; without them a local
+    // release build falls back to the debug key so `flutter run --release` still works.
+    val keystorePath: String? = System.getenv("ZIKIR_KEYSTORE")
+    signingConfigs {
+        if (keystorePath != null) {
+            create("zikir") {
+                storeFile = file(keystorePath)
+                storeType = "pkcs12"
+                storePassword = System.getenv("ZIKIR_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ZIKIR_KEY_ALIAS") ?: "zikir"
+                keyPassword = System.getenv("ZIKIR_KEYSTORE_PASSWORD")
+            }
         }
     }
+
+    buildTypes {
+        release {
+            signingConfig = if (keystorePath != null) {
+                signingConfigs.getByName("zikir")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 kotlin {

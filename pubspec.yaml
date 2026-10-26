@@ -41,6 +41,9 @@ dependencies:
   intl: ^0.20.3
   sqflite_common_ffi_web: ^1.2.0
   audioplayers: ^6.8.1
+  http: ^1.6.0
+  package_info_plus: ^10.2.2
+  ota_update: ^7.1.0
 
 dev_dependencies:
   flutter_test:

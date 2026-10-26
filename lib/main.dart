@@ -13,6 +13,7 @@ import 'db.dart';
 import 'pages.dart';
 import 'sound.dart';
 import 'theme.dart';
+import 'updater.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -368,7 +369,8 @@ class _CounterPageState extends State<CounterPage> {
                   1 => const PrayerTimesPage(),
                   2 => const ThemePage(),
                   3 => const SoundPage(),
-                  _ => const BulkImportPage(),
+                  4 => const BulkImportPage(),
+                  _ => const UpdatePage(),
                 });
               },
               itemBuilder: (_) => [
@@ -377,6 +379,7 @@ class _CounterPageState extends State<CounterPage> {
                 const PopupMenuItem(value: 2, child: Text('Theme')),
                 const PopupMenuItem(value: 3, child: Text('Sounds')),
                 const PopupMenuItem(value: 4, child: Text('Bulk import')),
+                const PopupMenuItem(value: 6, child: Text('Check for update')),
                 PopupMenuItem(
                   value: 5,
                   enabled: _count > 0,
