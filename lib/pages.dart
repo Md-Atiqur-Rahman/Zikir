@@ -60,7 +60,7 @@ class _SummaryPageState extends State<SummaryPage> {
               borderRadius: BorderRadius.circular(16),
             ),
             child: Text(
-              'Total DHIKRS = ${fmt(_total)}',
+              'Total zikir = ${fmt(_total)}',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleLarge
                   ?.copyWith(fontWeight: FontWeight.bold),
@@ -269,6 +269,36 @@ class _CategoryPageState extends State<CategoryPage> {
   }
 }
 
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final String value;
+  const _SectionHeader(this.title, this.value);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          if (value.isNotEmpty)
+            Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+}
+
 /// Everything saved on one day, with arrows and a calendar to move between days.
 class DayPage extends StatefulWidget {
   final DateTime date;
@@ -323,44 +353,53 @@ class _DayPageState extends State<DayPage> {
     final theme = Theme.of(context);
     final total = _rows.fold(0, (s, r) => s + r.count);
 
-    // group rows by zikir, keeping queue order
+    // all-day rows per zikir, in queue order
     final byZikir = <int, List<DayRow>>{};
     for (final r in _rows) {
       byZikir.putIfAbsent(r.categoryId, () => []).add(r);
     }
 
+    // rows per prayer time, in the order of the day
+    final byPrayer = <String, List<DayRow>>{};
+    for (final r in _rows) {
+      byPrayer.putIfAbsent(r.prayer, () => []).add(r);
+    }
+    final prayerNames = byPrayer.keys.toList()
+      ..sort(
+        (a, b) => (_prayerOrder[a] ?? 99).compareTo(_prayerOrder[b] ?? 99),
+      );
+    final onlyUnnamed = prayerNames.length == 1 && prayerNames.first.isEmpty;
+
+    Widget line(String name, int count) => ListTile(
+      dense: true,
+      title: Text(name),
+      trailing: Text(
+        fmt(count),
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+      ),
+    );
+
     final items = <Widget>[];
-    for (final rows in byZikir.values) {
-      rows.sort(
-        (a, b) => (_prayerOrder[a.prayer] ?? 99).compareTo(
-          _prayerOrder[b.prayer] ?? 99,
-        ),
-      );
-      final sum = rows.fold(0, (s, r) => s + r.count);
-      items.add(
-        ListTile(
-          title: Text(
-            rows.first.name,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          trailing: Text(
-            fmt(sum),
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-        ),
-      );
-      for (final r in rows.where((r) => r.prayer.isNotEmpty)) {
+    if (!onlyUnnamed) {
+      for (final name in prayerNames) {
+        final rows = byPrayer[name]!;
         items.add(
-          Padding(
-            padding: const EdgeInsets.only(left: 32, right: 16, bottom: 4),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [Text(r.prayer), Text(fmt(r.count))],
-            ),
+          _SectionHeader(
+            name.isEmpty ? 'অন্য সময় (no prayer)' : name,
+            fmt(rows.fold(0, (s, r) => s + r.count)),
           ),
         );
+        for (final r in rows) {
+          items.add(line(r.name, r.count));
+        }
       }
-      items.add(const Divider(height: 1));
+    }
+    if (_rows.isNotEmpty) {
+      items.add(_SectionHeader('সারাদিনের মোট (Day total)', fmt(total)));
+      for (final rows in byZikir.values) {
+        items.add(line(rows.first.name, rows.fold(0, (s, r) => s + r.count)));
+      }
+      items.add(const SizedBox(height: 16));
     }
 
     return Scaffold(
@@ -611,7 +650,7 @@ class _MonthsPageState extends State<MonthsPage> {
       appBar: AppBar(title: const Text('All total')),
       body: ListView(
         children: [
-          _TotalHeader('Total DHIKRS = ${fmt(_total)}'),
+          _TotalHeader('Total zikir = ${fmt(_total)}'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
@@ -827,6 +866,240 @@ class _DaysListPageState extends State<DaysListPage> {
             ),
           const SizedBox(height: 16),
         ],
+      ),
+    );
+  }
+}
+
+/// Backfill history: add the same per-day counts to every day of a date range.
+class BulkImportPage extends StatefulWidget {
+  const BulkImportPage({super.key});
+
+  @override
+  State<BulkImportPage> createState() => _BulkImportPageState();
+}
+
+class _BulkImportPageState extends State<BulkImportPage> {
+  late final DateTime _today = DateUtils.dateOnly(DateTime.now());
+  late DateTime _from = () {
+    final sep20 = DateTime(_today.year, 9, 20);
+    return sep20.isAfter(_today) ? DateTime(_today.year - 1, 9, 20) : sep20;
+  }();
+  late DateTime _to = _today;
+  List<Category> _cats = [];
+  List<Prayer> _prayers = [];
+  final _ctl = <int, TextEditingController>{};
+  final _on = <int, bool>{};
+  String _prayer = '';
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    for (final c in _ctl.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final cats = await Db.categories();
+    final prayers = await Db.prayers();
+    for (final c in cats) {
+      final n = defaultBulkCount(c.name);
+      _ctl[c.id] = TextEditingController(text: n > 0 ? '$n' : '');
+      _on[c.id] = n > 0;
+    }
+    setState(() {
+      _cats = cats;
+      _prayers = prayers;
+    });
+  }
+
+  int get _days =>
+      DateTime.utc(
+        _to.year,
+        _to.month,
+        _to.day,
+      ).difference(DateTime.utc(_from.year, _from.month, _from.day)).inDays +
+      1;
+
+  Map<int, int> get _counts => {
+    for (final c in _cats)
+      if (_on[c.id] == true && (int.tryParse(_ctl[c.id]!.text) ?? 0) > 0)
+        c.id: int.parse(_ctl[c.id]!.text),
+  };
+
+  Future<void> _pickDate({required bool from}) async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: from ? _from : _to,
+      firstDate: DateTime(2020),
+      lastDate: _today,
+    );
+    if (d == null) return;
+    setState(() {
+      if (from) {
+        _from = DateUtils.dateOnly(d);
+        if (_from.isAfter(_to)) _to = _from;
+      } else {
+        _to = DateUtils.dateOnly(d);
+        if (_to.isBefore(_from)) _from = _to;
+      }
+    });
+  }
+
+  Future<void> _import() async {
+    final counts = _counts;
+    final perDay = counts.values.fold(0, (a, b) => a + b);
+    final total = perDay * _days;
+    final f = DateFormat('d MMM yyyy');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add to history?'),
+        content: Text(
+          '${counts.length} zikirs \u00d7 $_days days '
+          '(${f.format(_from)} \u2013 ${f.format(_to)})\n'
+          'Total to add: ${fmt(total)}\n\n'
+          'This is added on top of anything already saved on those days.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _saving = true);
+    await Db.bulkAdd(_from, _to, counts, _prayer);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Added ${fmt(total)} to the history')),
+    );
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final counts = _counts;
+    final perDay = counts.values.fold(0, (a, b) => a + b);
+    final f = DateFormat('d MMM yyyy');
+    return Scaffold(
+      appBar: AppBar(title: const Text('Bulk import')),
+      body: _cats.isEmpty
+          ? const SizedBox.shrink()
+          : ListView(
+              padding: const EdgeInsets.only(bottom: 24),
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Text(
+                    'Every selected zikir gets its count on every day of the range.',
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _pickDate(from: true),
+                          icon: const Icon(Icons.event),
+                          label: Text('From  ${f.format(_from)}'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _pickDate(from: false),
+                          icon: const Icon(Icons.event),
+                          label: Text('To  ${f.format(_to)}'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _prayer,
+                    decoration: const InputDecoration(
+                      labelText: 'Save under prayer time',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      const DropdownMenuItem(value: '', child: Text('None')),
+                      for (final p in _prayers)
+                        DropdownMenuItem(value: p.name, child: Text(p.name)),
+                    ],
+                    onChanged: (v) => setState(() => _prayer = v ?? ''),
+                  ),
+                ),
+                const _SectionHeader('Zikir  \u2013  count per day', ''),
+                for (final c in _cats)
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 4, right: 16),
+                    leading: Checkbox(
+                      value: _on[c.id],
+                      onChanged: (v) => setState(() => _on[c.id] = v ?? false),
+                    ),
+                    title: Text(
+                      c.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: SizedBox(
+                      width: 84,
+                      child: TextField(
+                        controller: _ctl[c.id],
+                        keyboardType: TextInputType.number,
+                        textAlign: TextAlign.center,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (v) => setState(() {
+                          if ((int.tryParse(v) ?? 0) > 0) _on[c.id] = true;
+                        }),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${counts.length} zikirs \u00d7 $_days days\n'
+                  'Total ${fmt(perDay * _days)}',
+                ),
+              ),
+              FilledButton.icon(
+                onPressed: (_saving || counts.isEmpty) ? null : _import,
+                icon: const Icon(Icons.playlist_add),
+                label: const Text('Add to history'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

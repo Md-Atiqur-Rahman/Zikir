@@ -61,6 +61,8 @@ class _CounterPageState extends State<CounterPage> {
   List<Prayer> _prayers = [];
   int _todaySaved = 0; // saved today, not counting the running count
   int _allSaved = 0; // saved ever, not counting the running count
+  int _doneNow =
+      0; // different zikirs already saved today in the running prayer time
   int? _currentId;
   DateTime? _start; // when the running count began; decides date and prayer
   String? _prayerOverride; // prayer picked by hand for the running count; null = by clock
@@ -92,12 +94,16 @@ class _CounterPageState extends State<CounterPage> {
     final today = ymd(DateTime.now());
     final todaySaved = await Db.dayTotal(today);
     final allSaved = await Db.grandTotal();
+    final prayerNow =
+        _prayerOverride ?? prayerAt(prayers, _start ?? DateTime.now());
+    final doneNow = await Db.doneCount(today, prayerNow);
     if (mounted) {
       setState(() {
         _cats = cats;
         _prayers = prayers;
         _todaySaved = todaySaved;
         _allSaved = allSaved;
+        _doneNow = doneNow;
       });
     }
   }
@@ -221,6 +227,7 @@ class _CounterPageState extends State<CounterPage> {
     } else {
       _prefs?.setString('prayerOverride', _prayerOverride!);
     }
+    _reload();
   }
 
   /// Saves the running count into [cat] under the prayer window it started in,
@@ -229,12 +236,10 @@ class _CounterPageState extends State<CounterPage> {
     final start = _start ?? DateTime.now();
     final prayer = _prayerOverride ?? prayerAt(_prayers, start);
     final saved = _count;
-    await Db.saveCount(
-      cat.id,
-      DateFormat('yyyy-MM-dd').format(start),
-      prayer,
-      saved,
-    );
+    final date = DateFormat('yyyy-MM-dd').format(start);
+    final before = await Db.doneCount(date, prayer);
+    await Db.saveCount(cat.id, date, prayer, saved);
+    final after = await Db.doneCount(date, prayer);
     final next = _nextAfter(cat.id);
     _setCurrent(next.id);
     _clearSession();
@@ -249,6 +254,35 @@ class _CounterPageState extends State<CounterPage> {
           ),
         ),
       );
+    final total = _cats.length;
+    if (total > 0 && before < total && after >= total) {
+      _congratulate(prayer, total);
+    }
+  }
+
+  Future<void> _congratulate(String prayer, int total) async {
+    if (_sound) Beeper.playDone();
+    _vibrateFor(900);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.celebration, size: 48),
+        title: const Text('Congratulations!'),
+        content: Text(
+          'অভিনন্দন! ${prayer.isEmpty ? 'আজকের' : '$prayer-এর'} '
+          'সব $total টি জিকির সম্পন্ন হয়েছে।\n\n'
+          'All $total zikirs completed${prayer.isEmpty ? '' : ' for $prayer'}.',
+          textAlign: TextAlign.center,
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Alhamdulillah'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _reset() async {
@@ -324,17 +358,30 @@ class _CounterPageState extends State<CounterPage> {
               onPressed: () => _open(const SummaryPage()),
             ),
             PopupMenuButton<int>(
-              onSelected: (v) => _open(switch (v) {
-                0 => const ZikirListPage(),
-                1 => const PrayerTimesPage(),
-                2 => const ThemePage(),
-                _ => const SoundPage(),
-              }),
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 0, child: Text('জিকিরের তালিকা')),
-                PopupMenuItem(value: 1, child: Text('নামাজের সময়সূচী')),
-                PopupMenuItem(value: 2, child: Text('Theme')),
-                PopupMenuItem(value: 3, child: Text('Sounds')),
+              onSelected: (v) {
+                if (v == 5) {
+                  if (_count > 0) _discard();
+                  return;
+                }
+                _open(switch (v) {
+                  0 => const ZikirListPage(),
+                  1 => const PrayerTimesPage(),
+                  2 => const ThemePage(),
+                  3 => const SoundPage(),
+                  _ => const BulkImportPage(),
+                });
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(value: 0, child: Text('জিকিরের তালিকা')),
+                const PopupMenuItem(value: 1, child: Text('নামাজের সময়সূচী')),
+                const PopupMenuItem(value: 2, child: Text('Theme')),
+                const PopupMenuItem(value: 3, child: Text('Sounds')),
+                const PopupMenuItem(value: 4, child: Text('Bulk import')),
+                PopupMenuItem(
+                  value: 5,
+                  enabled: _count > 0,
+                  child: const Text('Clear running count'),
+                ),
               ],
             ),
           ],
@@ -349,17 +396,12 @@ class _CounterPageState extends State<CounterPage> {
                 target: cur?.targetLabel ?? '',
                 count: _count,
                 goal: cur?.goal ?? 0,
+                done: _doneNow,
+                total: _cats.length,
                 prayer: prayer,
                 prayerManual: _prayerOverride != null,
                 onPrayerTap: _choosePrayer,
                 theme: t,
-              ),
-              DayStats(
-                theme: t,
-                today: _todaySaved + _count,
-                all: _allSaved + _count,
-                onToday: () => _open(DayPage(date: DateTime.now())),
-                onAll: () => _open(const MonthsPage()),
               ),
               Expanded(
                 child: Center(
@@ -377,15 +419,19 @@ class _CounterPageState extends State<CounterPage> {
                   ),
                 ),
               ),
-              Text(
-                'Small button: save & next  •  tap the zikir name to change it',
-                style: TextStyle(color: t.onBackground, fontSize: 12),
+              DayStats(
+                theme: t,
+                today: _todaySaved + _count,
+                all: _allSaved + _count,
+                onToday: () => _open(DayPage(date: DateTime.now())),
+                onAll: () => _open(const MonthsPage()),
               ),
-              TextButton.icon(
-                onPressed: _count == 0 ? null : _discard,
-                style: TextButton.styleFrom(foregroundColor: t.onBackground),
-                icon: const Icon(Icons.delete_outline),
-                label: const Text('Clear without saving'),
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Small button: save & next  •  tap the zikir name to change it',
+                  style: TextStyle(color: t.onBackground, fontSize: 12),
+                ),
               ),
               CopyrightFooter(theme: t),
             ],
@@ -403,6 +449,8 @@ class InfoCard extends StatelessWidget {
   final String target;
   final int count;
   final int goal;
+  final int done;
+  final int total;
   final String prayer;
   final bool prayerManual;
   final VoidCallback onPrayerTap;
@@ -416,6 +464,8 @@ class InfoCard extends StatelessWidget {
     required this.target,
     required this.count,
     required this.goal,
+    required this.done,
+    required this.total,
     required this.prayer,
     required this.prayerManual,
     required this.onPrayerTap,
@@ -488,6 +538,15 @@ class InfoCard extends StatelessWidget {
                     onPressed: onPrayerTap,
                     visualDensity: VisualDensity.compact,
                   ),
+                  if (total > 0)
+                    Chip(
+                      avatar: Icon(
+                        done >= total ? Icons.check_circle : Icons.checklist,
+                        size: 16,
+                      ),
+                      label: Text('পড়া: $done/$total'),
+                      visualDensity: VisualDensity.compact,
+                    ),
                   if (target.isNotEmpty)
                     Chip(
                       avatar: const Icon(Icons.flag_outlined, size: 16),
@@ -596,7 +655,7 @@ class DayStats extends StatelessWidget {
   }
 }
 
-/// Copyright line with contact details; tap an item to copy it.
+/// Copyright line with email and phone icons; tap one to see the detail and copy it.
 class CopyrightFooter extends StatelessWidget {
   final ZikirTheme theme;
   const CopyrightFooter({super.key, required this.theme});
@@ -604,57 +663,67 @@ class CopyrightFooter extends StatelessWidget {
   static const email = 'atiqur.rahman.himel@gmail.com';
   static const phone = '01970091221';
 
-  Widget _item(BuildContext context, IconData icon, String text) {
-    final style = TextStyle(
-      color: theme.onBackground.withValues(alpha: 0.85),
-      fontSize: 11,
-    );
-    return InkWell(
-      onTap: () {
-        Clipboard.setData(ClipboardData(text: text));
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              content: Text('Copied $text'),
-              duration: const Duration(seconds: 1),
-            ),
-          );
-      },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: style.color),
-            const SizedBox(width: 4),
-            Text(text, style: style),
-          ],
+  void _show(BuildContext context, IconData icon, String title, String value) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(icon),
+        title: Text(title),
+        content: SelectableText(
+          value,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 18),
         ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: value));
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  SnackBar(
+                    content: Text('Copied $value'),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+            },
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy'),
+          ),
+        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-      child: Wrap(
-        alignment: WrapAlignment.center,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 14,
-        children: [
-          Text(
-            '© ${DateTime.now().year} Zikir',
-            style: TextStyle(
-              color: theme.onBackground.withValues(alpha: 0.85),
-              fontSize: 11,
-            ),
-          ),
-          _item(context, Icons.email_outlined, email),
-          _item(context, Icons.phone_outlined, phone),
-        ],
-      ),
+    final fg = theme.onBackground.withValues(alpha: 0.85);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          '\u00a9 ${DateTime.now().year} Zikir',
+          style: TextStyle(color: fg, fontSize: 11),
+        ),
+        IconButton(
+          tooltip: 'Email',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(Icons.email_outlined, size: 20, color: fg),
+          onPressed: () => _show(context, Icons.email_outlined, 'Email', email),
+        ),
+        IconButton(
+          tooltip: 'Phone',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(Icons.phone_outlined, size: 20, color: fg),
+          onPressed: () => _show(context, Icons.phone_outlined, 'Phone', phone),
+        ),
+      ],
     );
   }
 }
@@ -786,8 +855,8 @@ class CounterDevice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 320,
-      height: 460,
+      width: 340,
+      height: 520,
       child: Stack(
         alignment: Alignment.topCenter,
         children: [
@@ -795,10 +864,10 @@ class CounterDevice extends StatelessWidget {
           Container(
             decoration: BoxDecoration(
               borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(110),
-                topRight: Radius.circular(110),
-                bottomLeft: Radius.circular(150),
-                bottomRight: Radius.circular(150),
+                topLeft: Radius.circular(120),
+                topRight: Radius.circular(120),
+                bottomLeft: Radius.circular(160),
+                bottomRight: Radius.circular(160),
               ),
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
@@ -816,11 +885,11 @@ class CounterDevice extends StatelessWidget {
           ),
           // Display bezel + LCD
           Positioned(
-            top: 40,
-            left: 28,
-            right: 28,
+            top: 36,
+            left: 30,
+            right: 30,
             child: Container(
-              height: 120,
+              height: 116,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: theme.bezel,
@@ -852,15 +921,15 @@ class CounterDevice extends StatelessWidget {
           ),
           // Small reset button
           Positioned(
-            top: 190,
-            right: 40,
-            child: MetalButton(size: 44, onTap: onReset, glow: theme.glowReset),
+            top: 162,
+            right: 34,
+            child: MetalButton(size: 64, onTap: onReset, glow: theme.glowReset),
           ),
           // Big count button
           Positioned(
-            bottom: 50,
+            bottom: 36,
             child: MetalButton(
-              size: 200,
+              size: 250,
               onTap: onTap,
               glow: theme.glowCount,
               ridged: true,

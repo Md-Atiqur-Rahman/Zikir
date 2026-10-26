@@ -118,8 +118,38 @@ const _defaultMeanings = <String, String>{
   'রাব্বি আন্নি মাসসানিয়াদ দুররু ওয়া আনতা আরহামুর রাহিমিন': 'হে আমার রব, আমাকে কষ্ট স্পর্শ করেছে, আর আপনি সর্বশ্রেষ্ঠ দয়ালু। (সূরা আম্বিয়া ২১:৮৩)',
 };
 
-// Beep every N counts, for the default zikirs that have one.
-const _defaultBeepEvery = <String, int>{'আস্তাগফিরুল্লাহ': 20};
+// Per default zikir, in the same order as _defaultZikirs:
+// (target count, beep every, count per day suggested by the bulk-import form).
+const _defaultPlan = <(int, int, int)>[
+  (100, 25, 100), // 1
+  (100, 25, 100), // 2
+  (100, 25, 100), // 3
+  (100, 25, 100), // 4
+  (100, 25, 100), // 5
+  (21, 12, 21), // 6
+  (21, 12, 21), // 7
+  (21, 12, 21), // 8
+  (21, 12, 21), // 9
+  (100, 25, 100), // 10
+  (21, 12, 21), // 11
+  (21, 12, 21), // 12
+  (21, 12, 21), // 13
+  (21, 12, 21), // 14
+  (21, 12, 21), // 15
+  (21, 12, 10), // 16
+  (10, 0, 10), // 17
+  (10, 0, 10), // 18
+  (10, 0, 10), // 19
+  (10, 0, 10), // 20
+];
+
+Map<String, (int, int, int)> get _planByName => {
+  for (var i = 0; i < _defaultZikirs.length; i++)
+    _defaultZikirs[i].$1: _defaultPlan[i],
+};
+
+/// Count per day the bulk-import form pre-fills for [name]; 0 for custom zikirs.
+int defaultBulkCount(String name) => _planByName[name]?.$3 ?? 0;
 
 // name, start, end in minutes since midnight
 const _defaultPrayers = <(String, int, int)>[
@@ -141,7 +171,7 @@ class Db {
     final path = join(await getDatabasesPath(), 'tasbih.db');
     _db = await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, _) async {
         await db.execute('''CREATE TABLE categories(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,10 +230,17 @@ class Db {
               "UPDATE categories SET goal = CAST(target AS INTEGER) "
               "WHERE target != '' AND target NOT GLOB '*[^0-9]*'",
             );
-            for (final e in _defaultBeepEvery.entries) {
+          }
+          if (oldVersion < 5) {
+            // new default target + beep for the built-in zikirs
+            for (final e in _planByName.entries) {
               await db.update(
                 'categories',
-                {'beep_every': e.value},
+                {
+                  'goal': e.value.$1,
+                  'target': '${e.value.$1}',
+                  'beep_every': e.value.$2,
+                },
                 where: 'name = ?',
                 whereArgs: [e.key],
               );
@@ -244,10 +281,10 @@ class Db {
     for (final z in _defaultZikirs) {
       await db.insert('categories', {
         'name': z.$1,
-        'target': z.$2,
+        'target': '${_planByName[z.$1]?.$1 ?? 0}',
         'meaning': _defaultMeanings[z.$1] ?? '',
-        'goal': int.tryParse(z.$2) ?? 0,
-        'beep_every': _defaultBeepEvery[z.$1] ?? 0,
+        'goal': _planByName[z.$1]?.$1 ?? 0,
+        'beep_every': _planByName[z.$1]?.$2 ?? 0,
         'sort_order': i++,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
@@ -379,6 +416,43 @@ class Db {
       ON CONFLICT(category_id, date, prayer) DO UPDATE SET count = count + excluded.count''',
       [categoryId, date, prayer, count],
     );
+  }
+
+  /// How many different zikirs were saved on [date] under [prayer].
+  static Future<int> doneCount(String date, String prayer) async {
+    final db = await _database;
+    final r = await db.rawQuery(
+      'SELECT COUNT(DISTINCT category_id) AS n FROM entries WHERE date = ? AND prayer = ?',
+      [date, prayer],
+    );
+    return r.first['n'] as int;
+  }
+
+  /// Adds [counts] (category id -> count per day) to every day from [from] to [to].
+  static Future<void> bulkAdd(
+    DateTime from,
+    DateTime to,
+    Map<int, int> counts,
+    String prayer,
+  ) async {
+    final db = await _database;
+    final batch = db.batch();
+    for (
+      var d = DateTime(from.year, from.month, from.day);
+      !d.isAfter(to);
+      d = DateTime(d.year, d.month, d.day + 1)
+    ) {
+      for (final e in counts.entries) {
+        if (e.value <= 0) continue;
+        batch.rawInsert(
+          '''
+          INSERT INTO entries(category_id, date, prayer, count) VALUES(?, ?, ?, ?)
+          ON CONFLICT(category_id, date, prayer) DO UPDATE SET count = count + excluded.count''',
+          [e.key, ymd(d), prayer, e.value],
+        );
+      }
+    }
+    await batch.commit(noResult: true);
   }
 
   static Future<int> grandTotal() async {
