@@ -75,6 +75,112 @@ void main() {
     expect(http.toString(), contains('403')); // English in logs
   });
 
+  group('finding the newest build', () {
+    const pageUrl = 'github.com';
+    const tagBase = 'https://github.com/Md-Atiqur-Rahman/Zikir/releases/tag/';
+
+    /// A fake GitHub: the website redirect and the API answer as told.
+    ({http.Client client, List<String> calls}) github({
+      http.Response Function()? page,
+      http.Response Function()? api,
+    }) {
+      final calls = <String>[];
+      final client = MockClient((req) async {
+        calls.add(req.url.host);
+        if (req.url.host == pageUrl) {
+          return (page ?? () => http.Response('', 404))();
+        }
+        return (api ?? () => http.Response('{}', 500))();
+      });
+      return (client: client, calls: calls);
+    }
+
+    http.Response redirectTo(String tag) =>
+        http.Response('', 302, headers: {'location': '$tagBase$tag'});
+
+    http.Response apiRelease(String tag) =>
+        http.Response(jsonEncode(release(tag)), 200);
+
+    test('apk link is built from the tag', () {
+      expect(
+        apkUrlFor('build-9'),
+        'https://github.com/Md-Atiqur-Rahman/Zikir/releases/download/build-9/Zikir.apk',
+      );
+    });
+
+    test('the website redirect is enough; the API is not even asked', () async {
+      final g = github(page: () => redirectTo('build-20'));
+      final info = await fetchLatest(client: g.client);
+      expect(info.build, 20);
+      expect(info.url, apkUrlFor('build-20'));
+      expect(info.published, isNull);
+      expect(g.calls, ['github.com']);
+    });
+
+    test(
+      'works while the API is rate limited (403), as on mobile data',
+      () async {
+        final g = github(
+          page: () => redirectTo('build-21'),
+          api: () => http.Response('{"message":"rate limit exceeded"}', 403),
+        );
+        expect((await fetchLatest(client: g.client)).build, 21);
+      },
+    );
+
+    test('falls back to the API when the redirect is not usable', () async {
+      for (final page in <http.Response Function()>[
+        () => http.Response('', 500),
+        () => http.Response('', 302), // redirect without a target
+        () => http.Response('<html>', 200), // not a redirect at all
+        () => redirectTo('v2.0'), // not one of our tags
+      ]) {
+        final g = github(page: page, api: () => apiRelease('build-22'));
+        final info = await fetchLatest(client: g.client);
+        expect(info.build, 22);
+        expect(
+          info.url,
+          'https://example.com/build-22/Zikir.apk',
+        ); // from the API
+        expect(info.published, DateTime.utc(2026, 10, 26, 10));
+        expect(g.calls, ['github.com', 'api.github.com']);
+      }
+    });
+
+    test(
+      'both failing: the API reason is reported, with a hint for 403',
+      () async {
+        final g = github(
+          page: () => http.Response('', 500),
+          api: () => http.Response('{}', 403),
+        );
+        final e = await fetchLatest(client: g.client)
+            .then<Object?>((_) => null, onError: (Object e) => e);
+        expect(e, isA<UpdateError>());
+        final err = e! as UpdateError;
+        expect((err.kind, err.code), (UpdateErrorKind.http, 403));
+        expect(err.message(S.en), contains('limiting requests'));
+        expect(err.message(S.en), contains('403'));
+        expect(err.message(S.bangla), contains('সীমিত'));
+        expect(err.message(S.bangla), contains('৪০৩'));
+        // other codes keep the plain message
+        expect(
+          const UpdateError(UpdateErrorKind.http, 500).message(S.en),
+          isNot(contains('limiting')),
+        );
+      },
+    );
+
+    test('no connection at all gives the plain "no answer" message', () async {
+      final client = MockClient(
+        (req) async => throw http.ClientException('Failed host lookup'),
+      );
+      final e = await fetchLatest(client: client)
+          .then<Object?>((_) => null, onError: (Object e) => e);
+      expect((e! as UpdateError).kind, UpdateErrorKind.timeout);
+    });
+  });
+
   Future<void> open(
     WidgetTester tester, {
     required int installed,

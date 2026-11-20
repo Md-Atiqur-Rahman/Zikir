@@ -426,6 +426,12 @@ class S {
     'GitHub answered with code $code',
     'GitHub থেকে ত্রুটি এসেছে (কোড ${n(code)})',
   );
+  String updRateLimited(int code) => t(
+    'GitHub is limiting requests from your network (code $code). Try again in '
+        'a while, or switch between mobile data and Wi-Fi.',
+    'GitHub আপনার নেটওয়ার্ক থেকে অনুরোধ সীমিত করেছে (কোড ${n(code)})। কিছুক্ষণ '
+        'পর আবার চেষ্টা করুন, অথবা মোবাইল ডেটা ও Wi-Fi বদলে দেখুন।',
+  );
   String get updNoApk =>
       t('The latest release has no APK file', 'সর্বশেষ রিলিজে APK ফাইল নেই');
   String get updTimeout => t(

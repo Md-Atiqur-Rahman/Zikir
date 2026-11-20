@@ -9,9 +9,20 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import 'l10n.dart';
 
-/// Newest GitHub Release of the app; every release is tagged `build-<number>`.
-const _latestUrl =
-    'https://api.github.com/repos/Md-Atiqur-Rahman/Zikir/releases/latest';
+const _repo = 'Md-Atiqur-Rahman/Zikir';
+
+/// The website's "latest release" link. It answers with a redirect to
+/// `.../releases/tag/build-<number>` and, unlike the API, has no tiny
+/// per-network request limit (mobile data shares one address between many
+/// phones, which is why the API answered 403 there).
+const _latestPageUrl = 'https://github.com/$_repo/releases/latest';
+
+/// The API: more detail (publish date) but only 60 requests an hour per network.
+const _latestApiUrl = 'https://api.github.com/repos/$_repo/releases/latest';
+
+/// Every release is tagged `build-<number>` and carries one file, `Zikir.apk`.
+String apkUrlFor(String tag) =>
+    'https://github.com/$_repo/releases/download/$tag/Zikir.apk';
 
 class UpdateInfo {
   final int build;
@@ -35,6 +46,9 @@ class UpdateError implements Exception {
   const UpdateError(this.kind, [this.code]);
 
   String message(S s) => switch (kind) {
+    UpdateErrorKind.http when code == 403 || code == 429 => s.updRateLimited(
+      code ?? 0,
+    ),
     UpdateErrorKind.http => s.updHttp(code ?? 0),
     UpdateErrorKind.noApk => s.updNoApk,
     UpdateErrorKind.timeout => s.updTimeout,
@@ -45,35 +59,69 @@ class UpdateError implements Exception {
 }
 
 /// Asks GitHub for the newest release. Throws an [UpdateError] when it can't.
+///
+/// First the redirect on the website (no request limit); only if that does not
+/// give a usable answer, the API.
 Future<UpdateInfo> fetchLatest({http.Client? client}) async {
   final c = client ?? http.Client();
   try {
-    final r = await c
-        .get(
-          Uri.parse(_latestUrl),
-          headers: {'Accept': 'application/vnd.github+json'},
-        )
-        .timeout(const Duration(seconds: 15));
-    if (r.statusCode != 200) {
-      throw UpdateError(UpdateErrorKind.http, r.statusCode);
+    try {
+      return await _fromRedirect(c);
+    } catch (_) {
+      return await _fromApi(c);
     }
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
-    final build = buildFromTag((j['tag_name'] as String?) ?? '');
-    final assets = ((j['assets'] as List?) ?? const []).cast<Map>();
-    final apk = assets.where((a) => '${a['name']}'.endsWith('.apk'));
-    if (build == null || apk.isEmpty) {
-      throw const UpdateError(UpdateErrorKind.noApk);
-    }
-    return UpdateInfo(
-      build,
-      '${apk.first['browser_download_url']}',
-      DateTime.tryParse('${j['published_at']}'),
-    );
-  } on TimeoutException {
+  } on UpdateError {
+    rethrow;
+  } catch (_) {
+    // no connection, timeout, DNS failure...: one plain message for all of them
     throw const UpdateError(UpdateErrorKind.timeout);
   } finally {
-    if (client == null) c.close();
+    if (client == null) {
+      c.close();
+    }
   }
+}
+
+Future<UpdateInfo> _fromRedirect(http.Client c) async {
+  final req = http.Request('GET', Uri.parse(_latestPageUrl))
+    ..followRedirects = false;
+  final res = await c.send(req).timeout(const Duration(seconds: 15));
+  await res.stream.drain<void>(); // the body is not needed
+  final redirect = res.statusCode >= 300 && res.statusCode < 400;
+  final location = res.headers['location'];
+  if (!redirect || location == null) {
+    throw UpdateError(UpdateErrorKind.http, res.statusCode);
+  }
+  final tag = Uri.parse(location).pathSegments.last;
+  final build = buildFromTag(tag);
+  if (build == null) {
+    throw const UpdateError(UpdateErrorKind.noApk);
+  }
+  return UpdateInfo(build, apkUrlFor(tag), null);
+}
+
+Future<UpdateInfo> _fromApi(http.Client c) async {
+  final r = await c
+      .get(
+        Uri.parse(_latestApiUrl),
+        headers: {'Accept': 'application/vnd.github+json'},
+      )
+      .timeout(const Duration(seconds: 15));
+  if (r.statusCode != 200) {
+    throw UpdateError(UpdateErrorKind.http, r.statusCode);
+  }
+  final j = jsonDecode(r.body) as Map<String, dynamic>;
+  final build = buildFromTag((j['tag_name'] as String?) ?? '');
+  final assets = ((j['assets'] as List?) ?? const []).cast<Map>();
+  final apk = assets.where((a) => '${a['name']}'.endsWith('.apk'));
+  if (build == null || apk.isEmpty) {
+    throw const UpdateError(UpdateErrorKind.noApk);
+  }
+  return UpdateInfo(
+    build,
+    '${apk.first['browser_download_url']}',
+    DateTime.tryParse('${j['published_at']}'),
+  );
 }
 
 Future<int> installedBuild() async {
