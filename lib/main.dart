@@ -10,6 +10,7 @@ import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:vibration/vibration.dart';
 
 import 'db.dart';
+import 'lock.dart';
 import 'pages.dart';
 import 'sound.dart';
 import 'theme.dart';
@@ -21,6 +22,7 @@ Future<void> main() async {
   if (kIsWeb) databaseFactory = databaseFactoryFfiWeb;
   await themeController.load();
   await Beeper.load();
+  await AppLock.load();
   runApp(const TasbihApp());
 }
 
@@ -33,6 +35,9 @@ class TasbihApp extends StatelessWidget {
     builder: (_, t, _) => MaterialApp(
       title: 'Zikir',
       debugShowCheckedModeBanner: false,
+      // above the Navigator, so the lock also covers every page opened on top
+      builder: (context, child) =>
+          LockGate(child: child ?? const SizedBox.shrink()),
       theme: ThemeData(
         colorSchemeSeed: t.bodyB,
         brightness: t.dark ? Brightness.dark : Brightness.light,
@@ -364,6 +369,10 @@ class _CounterPageState extends State<CounterPage> {
                   if (_count > 0) _discard();
                   return;
                 }
+                if (v == 7) {
+                  showLockSettings(context);
+                  return;
+                }
                 _open(switch (v) {
                   0 => const ZikirListPage(),
                   1 => const PrayerTimesPage(),
@@ -379,6 +388,7 @@ class _CounterPageState extends State<CounterPage> {
                 const PopupMenuItem(value: 2, child: Text('Theme')),
                 const PopupMenuItem(value: 3, child: Text('Sounds')),
                 const PopupMenuItem(value: 4, child: Text('Bulk import')),
+                const PopupMenuItem(value: 7, child: Text('App lock')),
                 const PopupMenuItem(value: 6, child: Text('Check for update')),
                 PopupMenuItem(
                   value: 5,

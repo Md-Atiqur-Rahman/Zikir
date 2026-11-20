@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:digital_tasbih/db.dart';
+import 'package:digital_tasbih/lock.dart';
 import 'package:digital_tasbih/main.dart';
 import 'package:digital_tasbih/pages.dart';
 import 'package:flutter/material.dart';
@@ -18,6 +19,8 @@ void main() {
   final todayStr = ymd(today);
 
   setUpAll(() async {
+    AppLock.enabled.value =
+        false; // the lock has its own tests (lock_test.dart)
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
     dir = await Directory.systemTemp.createTemp('zikir_ui');
@@ -149,7 +152,7 @@ void main() {
   );
 
   testWidgets(
-    'day details are grouped by prayer, then the whole-day total per zikir',
+    'day details: groups start collapsed, one line per zikir, whole-day total last',
     (tester) async {
       phone(tester);
       final cats = (await tester.runAsync(() => Db.categories()))!;
@@ -165,24 +168,119 @@ void main() {
       );
       await settle(tester, until: find.text('সারাদিনের মোট (Day total)'));
 
+      // collapsed: only the headers (with totals) are on screen, no zikir names
+      expect(find.text('জোহর'), findsOneWidget);
+      expect(find.text('আসর'), findsOneWidget);
+      expect(find.text(cats[0].name), findsNothing);
+      expect(find.text('200'), findsNWidgets(2)); // জোহর and আসর headers
+      expect(find.text('400'), findsOneWidget); // whole-day total header
+      expect(find.text('Total = 400   (2 zikir)'), findsOneWidget);
+
       // জোহর comes before আসর (order of the day), even though আসর was saved first
       final zohr = tester.getTopLeft(find.text('জোহর')).dy;
       final asr = tester.getTopLeft(find.text('আসর')).dy;
-      expect(zohr, lessThan(asr));
-
-      // whole-day total section comes last: each prayer subtotal and each zikir total is 200
-      final totalHeader = tester
+      final total = tester
           .getTopLeft(find.text('সারাদিনের মোট (Day total)'))
           .dy;
-      expect(totalHeader, greaterThan(asr));
-      expect(
-        find.text('200'),
-        findsNWidgets(4),
-      ); // 2 prayer subtotals + 2 zikir totals
-      expect(find.text('Total = 400   (2 zikir)'), findsOneWidget);
+      expect(zohr, lessThan(asr));
+      expect(total, greaterThan(asr));
+
+      // expanding জোহর shows its zikirs on single lines with their counts
+      await tester.tap(find.text('জোহর'));
+      await tester.pumpAndSettle();
+      expect(find.text(cats[0].name), findsOneWidget);
+      expect(find.text(cats[4].name), findsOneWidget);
+      final nameText = tester.widget<Text>(find.text(cats[0].name));
+      expect(nameText.maxLines, 1);
+      expect(nameText.overflow, TextOverflow.ellipsis);
+      expect(find.text('100'), findsNWidgets(2));
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('day details: a count can be raised, lowered and removed', (
+    tester,
+  ) async {
+    phone(tester);
+    final cats = (await tester.runAsync(() => Db.categories()))!;
+    final a = cats[2].id; // আল্লাহু আকবার
+    await tester.runAsync(() => Db.saveCount(a, '2026-10-21', 'ফজর', 50));
+    await tester.pumpWidget(
+      MaterialApp(home: DayPage(date: DateTime(2026, 10, 21))),
+    );
+    await settle(tester, until: find.text('ফজর'));
+    await tester.tap(find.text('ফজর'));
+    await tester.pumpAndSettle();
+
+    Future<int?> saved() => tester.runAsync<int?>(
+      () async =>
+          (await Db.dayRows('2026-10-21'))
+              .where((r) => r.categoryId == a && r.prayer == 'ফজর')
+              .map((r) => r.count)
+              .firstOrNull,
+    );
+
+    // tap the row -> dialog with the current count; + twice, then save
+    await tester.tap(find.text(cats[2].name));
+    await tester.pumpAndSettle();
+    expect(find.text('Was 50'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('count-plus')));
+    await tester.tap(find.byKey(const Key('count-plus')));
+    await tester.pump();
+    await tester.tap(find.text('Save'));
+    await settle(tester, until: find.text('Total = 52   (1 zikir)'));
+    await tester.pumpAndSettle(); // let the dialog finish closing
+    expect(await saved(), 52);
+    expect(find.text('Total = 52   (1 zikir)'), findsOneWidget);
+
+    // type a smaller number
+    await tester.tap(find.text(cats[2].name));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('count-field')), '30');
+    await tester.pump();
+    await tester.tap(find.text('Save'));
+    await settle(tester, until: find.text('Total = 30   (1 zikir)'));
+    await tester.pumpAndSettle();
+    expect(await saved(), 30);
+
+    // cancelling changes nothing
+    await tester.tap(find.text(cats[2].name));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('count-plus')));
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(await saved(), 30);
+
+    // 0 removes the entry
+    await tester.tap(find.text(cats[2].name));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('count-field')), '0');
+    await tester.pump();
+    expect(find.text('Saving 0 removes this entry.'), findsOneWidget);
+    await tester.tap(find.text('Save'));
+    await settle(tester, until: find.text('Nothing saved on this day.'));
+    await tester.pumpAndSettle();
+    expect(await saved(), isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('day with only prayer-less rows: one editable group, no repeat', (
+    tester,
+  ) async {
+    phone(tester);
+    final cats = (await tester.runAsync(() => Db.categories()))!;
+    await tester.runAsync(() => Db.saveCount(cats[3].id, '2026-10-22', '', 70));
+    await tester.pumpWidget(
+      MaterialApp(home: DayPage(date: DateTime(2026, 10, 22))),
+    );
+    await settle(tester, until: find.text('অন্য সময় (no prayer)'));
+    expect(find.text('সারাদিনের মোট (Day total)'), findsNothing);
+    await tester.tap(find.text('অন্য সময় (no prayer)'));
+    await tester.pumpAndSettle();
+    expect(find.text(cats[3].name), findsOneWidget);
+    expect(find.byIcon(Icons.edit_outlined), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'bulk import: defaults, range 20 Sep to today, adds the right total',

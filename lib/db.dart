@@ -418,6 +418,30 @@ class Db {
     );
   }
 
+  /// Sets the saved count of one entry exactly; 0 removes the entry.
+  static Future<void> setEntryCount(
+    int categoryId,
+    String date,
+    String prayer,
+    int count,
+  ) async {
+    final db = await _database;
+    if (count <= 0) {
+      await db.delete(
+        'entries',
+        where: 'category_id = ? AND date = ? AND prayer = ?',
+        whereArgs: [categoryId, date, prayer],
+      );
+      return;
+    }
+    await db.rawInsert(
+      '''
+      INSERT INTO entries(category_id, date, prayer, count) VALUES(?, ?, ?, ?)
+      ON CONFLICT(category_id, date, prayer) DO UPDATE SET count = excluded.count''',
+      [categoryId, date, prayer, count],
+    );
+  }
+
   /// How many different zikirs were saved on [date] under [prayer].
   static Future<int> doneCount(String date, String prayer) async {
     final db = await _database;

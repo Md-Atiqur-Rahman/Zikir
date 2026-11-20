@@ -42,10 +42,15 @@ class _SummaryPageState extends State<SummaryPage> {
           IconButton(
             tooltip: 'Day-wise',
             icon: const Icon(Icons.calendar_month),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => DayPage(date: DateTime.now())),
-            ),
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => DayPage(date: DateTime.now()),
+                ),
+              );
+              _load();
+            },
           ),
         ],
       ),
@@ -205,12 +210,15 @@ class _CategoryPageState extends State<CategoryPage> {
         items.add(
           ListTile(
             dense: true,
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => DayPage(date: DateTime.parse(day.key)),
-              ),
-            ),
+            onTap: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => DayPage(date: DateTime.parse(day.key)),
+                ),
+              );
+              _load();
+            },
             title: Text(
               '$name  ${DateFormat('d MMM').format(DateTime.parse(day.key))}',
               style: const TextStyle(fontWeight: FontWeight.w600),
@@ -348,6 +356,17 @@ class _DayPageState extends State<DayPage> {
     if (d != null) _go(DateUtils.dateOnly(d));
   }
 
+  /// Change (or remove, with 0) the saved count of one row.
+  Future<void> _edit(DayRow r) async {
+    final v = await showDialog<int>(
+      context: context,
+      builder: (_) => _EditCountDialog(row: r, date: _date),
+    );
+    if (v == null || v == r.count) return;
+    await Db.setEntryCount(r.categoryId, ymd(_date), r.prayer, v);
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -370,37 +389,91 @@ class _DayPageState extends State<DayPage> {
       );
     final onlyUnnamed = prayerNames.length == 1 && prayerNames.first.isEmpty;
 
-    Widget line(String name, int count) => ListTile(
+    // one line per zikir: the name is cut with "..." so a long dua never wraps
+    Widget line(String name, int count, {VoidCallback? onTap}) => ListTile(
       dense: true,
-      title: Text(name),
-      trailing: Text(
-        fmt(count),
-        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+      contentPadding: const EdgeInsets.only(left: 16, right: 12),
+      title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      onTap: onTap,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            fmt(count),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          if (onTap != null) ...[
+            const SizedBox(width: 6),
+            Icon(
+              Icons.edit_outlined,
+              size: 16,
+              color: theme.colorScheme.outline,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    // every group starts collapsed; the header shows its title and total
+    Widget group(
+      String key,
+      String title,
+      int sum,
+      List<Widget> children,
+    ) => Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      elevation: 0,
+      clipBehavior: Clip.antiAlias,
+      color: theme.colorScheme.surfaceContainerHigh,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ExpansionTile(
+        key: ValueKey('${ymd(_date)}|$key'),
+        shape: const Border(),
+        collapsedShape: const Border(),
+        tilePadding: const EdgeInsets.only(left: 16, right: 8),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            Text(
+              fmt(sum),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        children: children,
       ),
     );
 
     final items = <Widget>[];
-    if (!onlyUnnamed) {
-      for (final name in prayerNames) {
-        final rows = byPrayer[name]!;
-        items.add(
-          _SectionHeader(
-            name.isEmpty ? 'অন্য সময় (no prayer)' : name,
-            fmt(rows.fold(0, (s, r) => s + r.count)),
-          ),
-        );
-        for (final r in rows) {
-          items.add(line(r.name, r.count));
-        }
-      }
+    for (final name in prayerNames) {
+      final rows = byPrayer[name]!;
+      items.add(
+        group(
+          'p:$name',
+          name.isEmpty ? 'অন্য সময় (no prayer)' : name,
+          rows.fold(0, (s, r) => s + r.count),
+          [for (final r in rows) line(r.name, r.count, onTap: () => _edit(r))],
+        ),
+      );
     }
-    if (_rows.isNotEmpty) {
-      items.add(_SectionHeader('সারাদিনের মোট (Day total)', fmt(total)));
-      for (final rows in byZikir.values) {
-        items.add(line(rows.first.name, rows.fold(0, (s, r) => s + r.count)));
-      }
-      items.add(const SizedBox(height: 16));
+    // with prayer names the whole-day sum per zikir is a separate read-only summary;
+    // with none it would only repeat the group above
+    if (_rows.isNotEmpty && !onlyUnnamed) {
+      items.add(
+        group('day', 'সারাদিনের মোট (Day total)', total, [
+          for (final rows in byZikir.values)
+            line(rows.first.name, rows.fold(0, (s, r) => s + r.count)),
+        ]),
+      );
     }
+    if (items.isNotEmpty) items.add(const SizedBox(height: 16));
 
     return Scaffold(
       appBar: AppBar(title: const Text('Day-wise')),
@@ -459,6 +532,101 @@ class _DayPageState extends State<DayPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Asks for a new count for one saved row; 0 removes it. Pops the new count.
+class _EditCountDialog extends StatefulWidget {
+  final DayRow row;
+  final DateTime date;
+  const _EditCountDialog({required this.row, required this.date});
+
+  @override
+  State<_EditCountDialog> createState() => _EditCountDialogState();
+}
+
+class _EditCountDialogState extends State<_EditCountDialog> {
+  late final _ctl = TextEditingController(text: '${widget.row.count}');
+
+  int get _value => int.tryParse(_ctl.text) ?? 0;
+
+  void _bump(int d) {
+    final v = (_value + d).clamp(0, 99999999);
+    setState(() => _ctl.text = '$v');
+  }
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.row;
+    final where = [
+      if (r.prayer.isNotEmpty) r.prayer,
+      DateFormat('d MMM yyyy').format(widget.date),
+    ].join('  \u00b7  ');
+    return AlertDialog(
+      title: Text(r.name, maxLines: 3, overflow: TextOverflow.ellipsis),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(where),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton.filledTonal(
+                key: const Key('count-minus'),
+                tooltip: 'Less',
+                icon: const Icon(Icons.remove),
+                onPressed: _value > 0 ? () => _bump(-1) : null,
+              ),
+              SizedBox(
+                width: 110,
+                child: TextField(
+                  key: const Key('count-field'),
+                  controller: _ctl,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              IconButton.filledTonal(
+                key: const Key('count-plus'),
+                tooltip: 'More',
+                icon: const Icon(Icons.add),
+                onPressed: () => _bump(1),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _value == 0
+                ? 'Saving 0 removes this entry.'
+                : 'Was ${fmt(r.count)}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _value),
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }
@@ -662,12 +830,15 @@ class _MonthsPageState extends State<MonthsPage> {
                   _lastTotal,
                   onTap: last == null
                       ? null
-                      : () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => DayPage(date: last),
-                          ),
-                        ),
+                      : () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => DayPage(date: last),
+                            ),
+                          );
+                          _load();
+                        },
                 ),
                 const SizedBox(width: 8),
                 _mini('This week', _week),
@@ -697,10 +868,13 @@ class _MonthsPageState extends State<MonthsPage> {
                   .format(DateTime.parse('${m.$1}-01')),
               value: m.$2,
               max: maxValue,
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => WeeksPage(month: m.$1)),
-              ),
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => WeeksPage(month: m.$1)),
+                );
+                _load();
+              },
             ),
           const SizedBox(height: 16),
         ],
@@ -791,13 +965,16 @@ class _WeeksPageState extends State<WeeksPage> {
               subtitle: '${f.format(w.from)} – ${f.format(w.to)}',
               value: w.total,
               max: maxValue,
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) =>
-                      DaysListPage(title: 'Week $n', from: w.from, to: w.to),
-                ),
-              ),
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        DaysListPage(title: 'Week $n', from: w.from, to: w.to),
+                  ),
+                );
+                _load();
+              },
             ),
           const SizedBox(height: 16),
         ],
@@ -828,10 +1005,12 @@ class _DaysListPageState extends State<DaysListPage> {
   @override
   void initState() {
     super.initState();
-    Db.dailyTotals(
-      ymd(widget.from),
-      ymd(widget.to),
-    ).then((d) => setState(() => _daily = d));
+    _load();
+  }
+
+  Future<void> _load() async {
+    final d = await Db.dailyTotals(ymd(widget.from), ymd(widget.to));
+    if (mounted) setState(() => _daily = d);
   }
 
   @override
@@ -859,10 +1038,13 @@ class _DaysListPageState extends State<DaysListPage> {
               max: maxValue,
               onTap: (_daily[ymd(d)] ?? 0) == 0
                   ? null
-                  : () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => DayPage(date: d)),
-                    ),
+                  : () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => DayPage(date: d)),
+                      );
+                      _load();
+                    },
             ),
           const SizedBox(height: 16),
         ],
