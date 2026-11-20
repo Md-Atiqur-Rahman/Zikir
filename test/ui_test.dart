@@ -17,6 +17,12 @@ void main() {
   late Directory dir;
   final today = DateTime.now();
   final todayStr = ymd(today);
+  // days inside / outside the editable last week
+  final recent = today.subtract(const Duration(days: 2));
+  final recentStr = ymd(recent);
+  final recent3 = today.subtract(const Duration(days: 3));
+  final old = today.subtract(const Duration(days: 10));
+  final oldStr = ymd(old);
 
   setUpAll(() async {
     AppLock.enabled.value =
@@ -69,6 +75,14 @@ void main() {
       SharedPreferences.setMockInitialValues({'sound': false});
       await tester.pumpWidget(const TasbihApp());
       await settle(tester, until: find.text('পড়া: 0/20'));
+
+      // the bottom hint line is gone, and the two total tiles are small
+      expect(find.textContaining('Small button'), findsNothing);
+      final tile = find.ancestor(
+        of: find.text('TODAY'),
+        matching: find.byType(InkWell),
+      );
+      expect(tester.getSize(tile.first).height, lessThan(52));
 
       // the "Clear without saving" button is gone from the screen
       expect(find.text('Clear without saving'), findsNothing);
@@ -204,17 +218,15 @@ void main() {
     phone(tester);
     final cats = (await tester.runAsync(() => Db.categories()))!;
     final a = cats[2].id; // আল্লাহু আকবার
-    await tester.runAsync(() => Db.saveCount(a, '2026-10-21', 'ফজর', 50));
-    await tester.pumpWidget(
-      MaterialApp(home: DayPage(date: DateTime(2026, 10, 21))),
-    );
+    await tester.runAsync(() => Db.saveCount(a, recentStr, 'ফজর', 50));
+    await tester.pumpWidget(MaterialApp(home: DayPage(date: recent)));
     await settle(tester, until: find.text('ফজর'));
     await tester.tap(find.text('ফজর'));
     await tester.pumpAndSettle();
 
     Future<int?> saved() => tester.runAsync<int?>(
       () async =>
-          (await Db.dayRows('2026-10-21'))
+          (await Db.dayRows(recentStr))
               .where((r) => r.categoryId == a && r.prayer == 'ফজর')
               .map((r) => r.count)
               .firstOrNull,
@@ -269,10 +281,8 @@ void main() {
   ) async {
     phone(tester);
     final cats = (await tester.runAsync(() => Db.categories()))!;
-    await tester.runAsync(() => Db.saveCount(cats[3].id, '2026-10-22', '', 70));
-    await tester.pumpWidget(
-      MaterialApp(home: DayPage(date: DateTime(2026, 10, 22))),
-    );
+    await tester.runAsync(() => Db.saveCount(cats[3].id, ymd(recent3), '', 70));
+    await tester.pumpWidget(MaterialApp(home: DayPage(date: recent3)));
     await settle(tester, until: find.text('অন্য সময় (no prayer)'));
     expect(find.text('সারাদিনের মোট (Day total)'), findsNothing);
     await tester.tap(find.text('অন্য সময় (no prayer)'));
@@ -326,6 +336,170 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('only the last 7 days can be edited; older days are view-only', (
+    tester,
+  ) async {
+    phone(tester);
+    final cats = (await tester.runAsync(() => Db.categories()))!;
+    await tester.runAsync(() async {
+      await Db.saveCount(cats[0].id, oldStr, 'ফজর', 40);
+    });
+
+    // 10 days ago: shown, but no pencil, no dialog, and a note says why
+    await tester.pumpWidget(MaterialApp(home: DayPage(date: old)));
+    await settle(tester, until: find.text('ফজর'));
+    await tester.tap(find.text('ফজর'));
+    await tester.pumpAndSettle();
+    expect(find.text(cats[0].name), findsOneWidget);
+    expect(find.byIcon(Icons.edit_outlined), findsNothing);
+    expect(find.byKey(const Key('read-only-note')), findsOneWidget);
+    await tester.tap(find.text(cats[0].name));
+    await tester.pumpAndSettle();
+    expect(find.text('Save'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('editable window: today and the 6 days before it', () {
+    final now = DateTime(2026, 11, 20, 15, 30);
+    expect(isEditableDay(DateTime(2026, 11, 20), now: now), isTrue);
+    expect(
+      isEditableDay(DateTime(2026, 11, 14), now: now),
+      isTrue,
+    ); // 6 days ago
+    expect(
+      isEditableDay(DateTime(2026, 11, 13), now: now),
+      isFalse,
+    ); // 7 days ago
+    expect(isEditableDay(DateTime(2026, 10, 1), now: now), isFalse);
+    expect(isEditableDay(DateTime(2026, 11, 21), now: now), isFalse); // future
+    expect(editableDays, 7);
+  });
+
+  group('counter: choosing another zikir, no toast', () {
+    Future<List<Category>> pump(
+      WidgetTester tester, {
+      required int count,
+      required int current,
+      String prayer = 'আসর',
+    }) async {
+      phone(tester);
+      final cats = (await tester.runAsync(() => Db.categories()))!;
+      SharedPreferences.setMockInitialValues({
+        'sound': false,
+        'prayerOverride': prayer,
+        'currentCategory': cats[current].id,
+        'count': count,
+        if (count > 0) 'start': DateTime.now().toIso8601String(),
+      });
+      await tester.pumpWidget(const TasbihApp());
+      await settle(tester, until: find.textContaining('পড়া:'));
+      return cats;
+    }
+
+    Finder lcd(String n) =>
+        find.descendant(of: find.byType(CounterDevice), matching: find.text(n));
+
+    Future<void> openList(WidgetTester tester) async {
+      // top-left of the card is padding + name, away from the chips
+      await tester.tapAt(
+        tester.getTopLeft(find.byType(InfoCard)) + const Offset(30, 20),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'a count in progress is saved under the old zikir, the picked one starts at 0',
+      (tester) async {
+        final cats = await pump(
+          tester,
+          count: 30,
+          current: 1,
+        ); // আলহামদুলিল্লাহ 30
+        final oldBefore = (await tester.runAsync(
+          () => Db.categoryTotal(cats[1].id),
+        ))!;
+        final newBefore = (await tester.runAsync(
+          () => Db.categoryTotal(cats[2].id),
+        ))!;
+        expect(lcd('30'), findsOneWidget);
+
+        await openList(tester);
+        await tester.tap(find.text(cats[2].name)); // আল্লাহু আকবার
+        await settle(tester, until: lcd('0'));
+        await tester.pumpAndSettle();
+
+        expect(lcd('0'), findsOneWidget);
+        expect(
+          await tester.runAsync(() => Db.categoryTotal(cats[1].id)),
+          oldBefore + 30,
+        );
+        expect(
+          await tester.runAsync(() => Db.categoryTotal(cats[2].id)),
+          newBefore,
+        );
+        final prefs = await tester.runAsync(SharedPreferences.getInstance);
+        expect(prefs!.getInt('currentCategory'), cats[2].id);
+        expect(find.byType(SnackBar), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('nothing counted: picking another zikir just switches', (
+      tester,
+    ) async {
+      final cats = await pump(tester, count: 0, current: 1);
+      final total = (await tester.runAsync(() => Db.grandTotal()))!;
+      await openList(tester);
+      await tester.tap(find.text(cats[3].name));
+      await tester.pumpAndSettle();
+      final prefs = (await tester.runAsync(SharedPreferences.getInstance))!;
+      // the switch happens after a few real database reads; wait for it (max ~8 s)
+      for (var i = 0; i < 40; i++) {
+        if (prefs.getInt('currentCategory') == cats[3].id) break;
+        await tester.runAsync(
+          () => Future.delayed(const Duration(milliseconds: 200)),
+        );
+        await tester.pump();
+      }
+      expect(prefs.getInt('currentCategory'), cats[3].id);
+      expect(await tester.runAsync(() => Db.grandTotal()), total);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('picking the zikir you are already on changes nothing', (
+      tester,
+    ) async {
+      final cats = await pump(tester, count: 12, current: 4);
+      final total = (await tester.runAsync(() => Db.grandTotal()))!;
+      await openList(tester);
+      await tester.tap(find.text(cats[4].name).last);
+      await tester.pumpAndSettle();
+      await settle(tester);
+      expect(lcd('12'), findsOneWidget);
+      expect(await tester.runAsync(() => Db.grandTotal()), total);
+    });
+
+    testWidgets('reset saves and moves on without showing any toast', (
+      tester,
+    ) async {
+      final cats = await pump(tester, count: 5, current: 5, prayer: 'মাগরিব');
+      final before = (await tester.runAsync(
+        () => Db.categoryTotal(cats[5].id),
+      ))!;
+      await tester.tap(resetButton());
+      await settle(tester, until: lcd('0'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        await tester.runAsync(() => Db.categoryTotal(cats[5].id)),
+        before + 5,
+      );
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.textContaining('Saved'), findsNothing);
+      expect(find.textContaining('Next:'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  });
 
   test('sanity: today string is the one the app uses', () {
     expect(todayStr, matches(RegExp(r'^\d{4}-\d{2}-\d{2}$')));

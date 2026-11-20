@@ -307,6 +307,17 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+/// How many days back (today included) a saved count can still be edited.
+const editableDays = 7;
+
+/// True for today and the six days before it; older days are view-only.
+bool isEditableDay(DateTime day, {DateTime? now}) {
+  final today = DateUtils.dateOnly(now ?? DateTime.now());
+  final oldest = today.subtract(const Duration(days: editableDays - 1));
+  final d = DateUtils.dateOnly(day);
+  return !d.isBefore(oldest) && !d.isAfter(today);
+}
+
 /// Everything saved on one day, with arrows and a calendar to move between days.
 class DayPage extends StatefulWidget {
   final DateTime date;
@@ -324,6 +335,7 @@ class _DayPageState extends State<DayPage> {
 
   DateTime get _today => DateUtils.dateOnly(DateTime.now());
   DateTime get _oldest => _today.subtract(const Duration(days: 365));
+  bool get _editable => isEditableDay(_date);
 
   @override
   void initState() {
@@ -459,7 +471,10 @@ class _DayPageState extends State<DayPage> {
           'p:$name',
           name.isEmpty ? 'অন্য সময় (no prayer)' : name,
           rows.fold(0, (s, r) => s + r.count),
-          [for (final r in rows) line(r.name, r.count, onTap: () => _edit(r))],
+          [
+            for (final r in rows)
+              line(r.name, r.count, onTap: _editable ? () => _edit(r) : null),
+          ],
         ),
       );
     }
@@ -523,6 +538,15 @@ class _DayPageState extends State<DayPage> {
               ),
             ),
           ),
+          if (!_editable && _rows.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'Older than $editableDays days: view only.',
+                key: const Key('read-only-note'),
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
           Expanded(
             child: !_loaded
                 ? const SizedBox.shrink()

@@ -20,7 +20,7 @@ class AppLock {
   }
 }
 
-/// A random addition sum, different every time.
+/// A random, easy addition sum.
 class MathQuestion {
   final List<int> terms;
   const MathQuestion(this.terms);
@@ -28,20 +28,9 @@ class MathQuestion {
   int get answer => terms.fold(0, (a, b) => a + b);
   String get text => '${terms.join(' + ')} = ?';
 
-  factory MathQuestion.random(Random r) {
-    switch (r.nextInt(3)) {
-      case 0: // two numbers, 11-49
-        return MathQuestion([11 + r.nextInt(39), 11 + r.nextInt(39)]);
-      case 1: // three numbers, 3-19
-        return MathQuestion([
-          3 + r.nextInt(17),
-          3 + r.nextInt(17),
-          3 + r.nextInt(17),
-        ]);
-      default: // a 3-digit number plus a 2-digit number
-        return MathQuestion([100 + r.nextInt(300), 11 + r.nextInt(89)]);
-    }
-  }
+  /// Always two single digits added together, like `4 + 6 = ?`.
+  factory MathQuestion.random(Random r) =>
+      MathQuestion([1 + r.nextInt(9), 1 + r.nextInt(9)]);
 }
 
 /// A sum with an on-screen number pad. A wrong answer clears the input and

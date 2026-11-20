@@ -48,19 +48,18 @@ void main() {
     AppLock.enabled.value = true;
   });
 
-  test('questions are additions with the right answer and vary', () {
+  test('questions are always two single digits added, like 4 + 6 = ?', () {
     final r = Random(1);
     final seen = <String>{};
-    for (var i = 0; i < 200; i++) {
+    for (var i = 0; i < 500; i++) {
       final q = MathQuestion.random(r);
-      expect(q.terms.length, inInclusiveRange(2, 3));
-      expect(q.terms.every((t) => t >= 3 && t < 400), isTrue);
-      expect(q.answer, q.terms.reduce((a, b) => a + b));
-      expect(q.text, endsWith(' = ?'));
-      expect(q.text, contains(' + '));
+      expect(q.terms.length, 2); // never 2 + 3 + 4
+      expect(q.terms.every((t) => t >= 1 && t <= 9), isTrue); // never 12 + 6
+      expect(q.text, matches(RegExp(r'^\d \+ \d = \?$')));
+      expect(q.answer, q.terms[0] + q.terms[1]);
       seen.add(q.text);
     }
-    expect(seen.length, greaterThan(100));
+    expect(seen.length, greaterThan(60)); // still varies (81 possible)
     expect(const MathQuestion([2, 3]).text, '2 + 3 = ?');
     expect(const MathQuestion([2, 3]).answer, 5);
   });

@@ -237,34 +237,28 @@ class _CounterPageState extends State<CounterPage> {
   }
 
   /// Saves the running count into [cat] under the prayer window it started in,
-  /// then moves on to the next zikir in the list.
-  Future<void> _commit(Category cat) async {
+  /// clears the counter and makes [switchTo] the current zikir. Shows the
+  /// congratulation box when that completes the round. (No toast.)
+  Future<void> _saveRunning(Category cat, {required int switchTo}) async {
     final start = _start ?? DateTime.now();
     final prayer = _prayerOverride ?? prayerAt(_prayers, start);
-    final saved = _count;
     final date = DateFormat('yyyy-MM-dd').format(start);
     final before = await Db.doneCount(date, prayer);
-    await Db.saveCount(cat.id, date, prayer, saved);
+    await Db.saveCount(cat.id, date, prayer, _count);
     final after = await Db.doneCount(date, prayer);
-    final next = _nextAfter(cat.id);
-    _setCurrent(next.id);
+    _setCurrent(switchTo);
     _clearSession();
     await _reload();
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            'Saved $saved → ${cat.name}${prayer.isEmpty ? '' : ' ($prayer)'}\nNext: ${next.name}',
-          ),
-        ),
-      );
     final total = _cats.length;
     if (total > 0 && before < total && after >= total) {
       _congratulate(prayer, total);
     }
   }
+
+  /// Reset: save into [cat], then go to the next zikir in the list.
+  Future<void> _commit(Category cat) =>
+      _saveRunning(cat, switchTo: _nextAfter(cat.id).id);
 
   Future<void> _congratulate(String prayer, int total) async {
     if (_sound) Beeper.playDone();
@@ -298,7 +292,8 @@ class _CounterPageState extends State<CounterPage> {
   }
 
   /// Tap on the zikir card: pick the zikir yourself instead of following the queue.
-  /// The next reset saves into it, then the queue continues from there.
+  /// A count in progress is saved under the zikir it belonged to, and the picked
+  /// zikir starts from zero; the queue then continues from the picked one.
   Future<void> _choose() async {
     final id = await showDialog<int>(
       context: context,
@@ -306,7 +301,13 @@ class _CounterPageState extends State<CounterPage> {
     );
     if (id == null) return;
     await _reload();
-    setState(() => _setCurrent(id));
+    final cur = _current;
+    if (cur == null || id == cur.id) return; // same zikir: nothing changes
+    if (_count > 0) {
+      await _saveRunning(cur, switchTo: id);
+    } else {
+      setState(() => _setCurrent(id));
+    }
   }
 
   Future<void> _discard() async {
@@ -438,13 +439,6 @@ class _CounterPageState extends State<CounterPage> {
                 all: _allSaved + _count,
                 onToday: () => _open(DayPage(date: DateTime.now())),
                 onAll: () => _open(const MonthsPage()),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'Small button: save & next  •  tap the zikir name to change it',
-                  style: TextStyle(color: t.onBackground, fontSize: 12),
-                ),
               ),
               CopyrightFooter(theme: t),
             ],
@@ -599,14 +593,14 @@ class DayStats extends StatelessWidget {
     return Expanded(
       child: Material(
         color: fg.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         child: InkWell(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(14),
           onTap: onTap,
           child: Container(
-            padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+            padding: const EdgeInsets.fromLTRB(10, 3, 4, 3),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(14),
               border: Border.all(color: fg.withValues(alpha: 0.18)),
             ),
             child: Row(
@@ -617,13 +611,13 @@ class DayStats extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          Icon(icon, size: 14, color: theme.glowCount),
-                          const SizedBox(width: 4),
+                          Icon(icon, size: 11, color: theme.glowCount),
+                          const SizedBox(width: 3),
                           Text(
                             label,
                             style: TextStyle(
                               color: fg.withValues(alpha: 0.85),
-                              fontSize: 12,
+                              fontSize: 10,
                               letterSpacing: 0.4,
                             ),
                           ),
@@ -636,7 +630,7 @@ class DayStats extends StatelessWidget {
                           NumberFormat.decimalPattern().format(value),
                           style: TextStyle(
                             color: fg,
-                            fontSize: 26,
+                            fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -644,7 +638,11 @@ class DayStats extends StatelessWidget {
                     ],
                   ),
                 ),
-                Icon(Icons.chevron_right, color: fg.withValues(alpha: 0.7)),
+                Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: fg.withValues(alpha: 0.7),
+                ),
               ],
             ),
           ),
