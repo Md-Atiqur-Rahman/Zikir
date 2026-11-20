@@ -3,13 +3,15 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart' show databaseFactory;
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:vibration/vibration.dart';
 
 import 'db.dart';
+import 'l10n.dart';
 import 'lock.dart';
 import 'pages.dart';
 import 'sound.dart';
@@ -23,6 +25,8 @@ Future<void> main() async {
   await themeController.load();
   await Beeper.load();
   await AppLock.load();
+  await lang.load();
+  await initializeDateFormatting('bn');
   runApp(const TasbihApp());
 }
 
@@ -30,20 +34,31 @@ class TasbihApp extends StatelessWidget {
   const TasbihApp({super.key});
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<ZikirTheme>(
-    valueListenable: themeController,
-    builder: (_, t, _) => MaterialApp(
-      title: 'Zikir',
-      debugShowCheckedModeBanner: false,
-      // above the Navigator, so the lock also covers every page opened on top
-      builder: (context, child) =>
-          LockGate(child: child ?? const SizedBox.shrink()),
-      theme: ThemeData(
-        colorSchemeSeed: t.bodyB,
-        brightness: t.dark ? Brightness.dark : Brightness.light,
-        useMaterial3: true,
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: lang,
+    builder: (context, _) => ValueListenableBuilder<ZikirTheme>(
+      valueListenable: themeController,
+      builder: (_, t, _) => MaterialApp(
+        onGenerateTitle: (context) => S.of(context).appName,
+        debugShowCheckedModeBanner: false,
+        // Bangla by default; the quick button / language setting changes it
+        locale: lang.locale,
+        supportedLocales: const [Locale('bn'), Locale('en')],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        // above the Navigator, so the lock also covers every page opened on top
+        builder: (context, child) =>
+            LockGate(child: child ?? const SizedBox.shrink()),
+        theme: ThemeData(
+          colorSchemeSeed: t.bodyB,
+          brightness: t.dark ? Brightness.dark : Brightness.light,
+          useMaterial3: true,
+        ),
+        home: const CounterPage(),
       ),
-      home: const CounterPage(),
     ),
   );
 }
@@ -202,29 +217,32 @@ class _CounterPageState extends State<CounterPage> {
     final auto = prayerAt(_prayers, _start ?? DateTime.now());
     final picked = await showDialog<String>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Choose time (ওয়াক্ত)'),
-        children: [
-          ListTile(
-            leading: const Icon(Icons.schedule),
-            title: const Text('Auto (by clock)'),
-            subtitle: Text(auto.isEmpty ? 'No prayer window now' : auto),
-            selected: _prayerOverride == null,
-            onTap: () => Navigator.pop(ctx, _autoKey),
-          ),
-          for (final p in _prayers)
+      builder: (ctx) {
+        final s = S.of(ctx);
+        return SimpleDialog(
+          title: Text(s.chooseTime),
+          children: [
             ListTile(
-              title: Text(p.name),
-              selected: _prayerOverride == p.name,
-              onTap: () => Navigator.pop(ctx, p.name),
+              leading: const Icon(Icons.schedule),
+              title: Text(s.autoByClock),
+              subtitle: Text(auto.isEmpty ? s.noPrayerWindow : s.prayer(auto)),
+              selected: _prayerOverride == null,
+              onTap: () => Navigator.pop(ctx, _autoKey),
             ),
-          ListTile(
-            title: const Text('None'),
-            selected: _prayerOverride == '',
-            onTap: () => Navigator.pop(ctx, ''),
-          ),
-        ],
-      ),
+            for (final p in _prayers)
+              ListTile(
+                title: Text(s.prayer(p.name)),
+                selected: _prayerOverride == p.name,
+                onTap: () => Navigator.pop(ctx, p.name),
+              ),
+            ListTile(
+              title: Text(s.none),
+              selected: _prayerOverride == '',
+              onTap: () => Navigator.pop(ctx, ''),
+            ),
+          ],
+        );
+      },
     );
     if (picked == null) return;
     setState(() => _prayerOverride = picked == _autoKey ? null : picked);
@@ -242,7 +260,7 @@ class _CounterPageState extends State<CounterPage> {
   Future<void> _saveRunning(Category cat, {required int switchTo}) async {
     final start = _start ?? DateTime.now();
     final prayer = _prayerOverride ?? prayerAt(_prayers, start);
-    final date = DateFormat('yyyy-MM-dd').format(start);
+    final date = ymd(start);
     final before = await Db.doneCount(date, prayer);
     await Db.saveCount(cat.id, date, prayer, _count);
     final after = await Db.doneCount(date, prayer);
@@ -265,23 +283,24 @@ class _CounterPageState extends State<CounterPage> {
     _vibrateFor(900);
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        icon: const Icon(Icons.celebration, size: 48),
-        title: const Text('Congratulations!'),
-        content: Text(
-          'অভিনন্দন! ${prayer.isEmpty ? 'আজকের' : '$prayer-এর'} '
-          'সব $total টি জিকির সম্পন্ন হয়েছে।\n\n'
-          'All $total zikirs completed${prayer.isEmpty ? '' : ' for $prayer'}.',
-          textAlign: TextAlign.center,
-        ),
-        actionsAlignment: MainAxisAlignment.center,
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Alhamdulillah'),
+      builder: (ctx) {
+        final s = S.of(ctx);
+        return AlertDialog(
+          icon: const Icon(Icons.celebration, size: 48),
+          title: Text(s.congratsTitle),
+          content: Text(
+            s.congratsBody(s.prayer(prayer), total),
+            textAlign: TextAlign.center,
           ),
-        ],
-      ),
+          actionsAlignment: MainAxisAlignment.center,
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(s.congratsButton),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -313,20 +332,23 @@ class _CounterPageState extends State<CounterPage> {
   Future<void> _discard() async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('Clear without saving?'),
-        content: Text('The count of $_count will be lost.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(c, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(c, true),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
+      builder: (c) {
+        final s = S.of(c);
+        return AlertDialog(
+          title: Text(s.clearTitle),
+          content: Text(s.clearBody(_count)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: Text(s.cancel),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: Text(s.clear),
+            ),
+          ],
+        );
+      },
     );
     if (ok == true) _clearSession();
   }
@@ -340,27 +362,45 @@ class _CounterPageState extends State<CounterPage> {
   Widget build(BuildContext context) {
     final cur = _current;
     final prayer = _prayerNow;
+    final s = S.of(context);
     return ValueListenableBuilder<ZikirTheme>(
       valueListenable: themeController,
       builder: (context, t, _) => Scaffold(
         backgroundColor: t.background,
         appBar: AppBar(
-          title: const Text('Zikir'),
+          title: Text(s.appName),
           backgroundColor: Colors.transparent,
           foregroundColor: t.onBackground,
           actions: [
+            // quick switch, for this session only; the saved default is in the menu
+            Tooltip(
+              message: s.langToggleTooltip,
+              child: TextButton(
+                key: const Key('lang-toggle'),
+                style: TextButton.styleFrom(
+                  foregroundColor: t.onBackground,
+                  minimumSize: const Size(40, 40),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                onPressed: lang.toggle,
+                child: Text(
+                  s.langToggleLabel,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
             IconButton(
-              tooltip: _vibrate ? 'Vibration on' : 'Vibration off',
+              tooltip: _vibrate ? s.vibrationOn : s.vibrationOff,
               icon: Icon(_vibrate ? Icons.vibration : Icons.mobile_off),
               onPressed: _toggleVibrate,
             ),
             IconButton(
-              tooltip: _sound ? 'Sound on' : 'Sound off',
+              tooltip: _sound ? s.soundOn : s.soundOff,
               icon: Icon(_sound ? Icons.volume_up : Icons.volume_off),
               onPressed: _toggleSound,
             ),
             IconButton(
-              tooltip: 'Summary',
+              tooltip: s.summary,
               icon: const Icon(Icons.bar_chart),
               onPressed: () => _open(const SummaryPage()),
             ),
@@ -374,6 +414,10 @@ class _CounterPageState extends State<CounterPage> {
                   showLockSettings(context);
                   return;
                 }
+                if (v == 8) {
+                  showLanguageDialog(context);
+                  return;
+                }
                 _open(switch (v) {
                   0 => const ZikirListPage(),
                   1 => const PrayerTimesPage(),
@@ -384,17 +428,18 @@ class _CounterPageState extends State<CounterPage> {
                 });
               },
               itemBuilder: (_) => [
-                const PopupMenuItem(value: 0, child: Text('জিকিরের তালিকা')),
-                const PopupMenuItem(value: 1, child: Text('নামাজের সময়সূচী')),
-                const PopupMenuItem(value: 2, child: Text('Theme')),
-                const PopupMenuItem(value: 3, child: Text('Sounds')),
-                const PopupMenuItem(value: 4, child: Text('Bulk import')),
-                const PopupMenuItem(value: 7, child: Text('App lock')),
-                const PopupMenuItem(value: 6, child: Text('Check for update')),
+                PopupMenuItem(value: 0, child: Text(s.menuZikirList)),
+                PopupMenuItem(value: 1, child: Text(s.menuPrayerTimes)),
+                PopupMenuItem(value: 2, child: Text(s.menuTheme)),
+                PopupMenuItem(value: 3, child: Text(s.menuSounds)),
+                PopupMenuItem(value: 4, child: Text(s.menuBulkImport)),
+                PopupMenuItem(value: 8, child: Text(s.menuLanguage)),
+                PopupMenuItem(value: 7, child: Text(s.menuAppLock)),
+                PopupMenuItem(value: 6, child: Text(s.menuUpdate)),
                 PopupMenuItem(
                   value: 5,
                   enabled: _count > 0,
-                  child: const Text('Clear running count'),
+                  child: Text(s.menuClearRunning),
                 ),
               ],
             ),
@@ -481,6 +526,7 @@ class InfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -503,7 +549,7 @@ class InfoCard extends StatelessWidget {
               Text.rich(
                 TextSpan(
                   children: [
-                    TextSpan(text: name),
+                    TextSpan(text: s.zikirName(name)),
                     WidgetSpan(
                       alignment: PlaceholderAlignment.middle,
                       child: Icon(
@@ -523,7 +569,7 @@ class InfoCard extends StatelessWidget {
               if (meaning.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
-                  meaning,
+                  s.zikirMeaning(name, meaning),
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: theme.onBackground.withValues(alpha: 0.85),
@@ -541,7 +587,9 @@ class InfoCard extends StatelessWidget {
                       prayerManual ? Icons.edit : Icons.access_time,
                       size: 16,
                     ),
-                    label: Text(prayer.isEmpty ? 'সময়: —' : prayer),
+                    label: Text(
+                      prayer.isEmpty ? s.prayerChipEmpty : s.prayer(prayer),
+                    ),
                     onPressed: onPrayerTap,
                     visualDensity: VisualDensity.compact,
                   ),
@@ -551,14 +599,16 @@ class InfoCard extends StatelessWidget {
                         done >= total ? Icons.check_circle : Icons.checklist,
                         size: 16,
                       ),
-                      label: Text('পড়া: $done/$total'),
+                      label: Text(s.doneChip(done, total)),
                       visualDensity: VisualDensity.compact,
                     ),
                   if (target.isNotEmpty)
                     Chip(
                       avatar: const Icon(Icons.flag_outlined, size: 16),
                       label: Text(
-                        goal > 0 ? 'সংখ্যা: $count / $goal' : 'সংখ্যা: $target',
+                        goal > 0
+                            ? s.countChipGoal(count, goal)
+                            : s.countChip(target),
                       ),
                       visualDensity: VisualDensity.compact,
                     ),
@@ -588,7 +638,13 @@ class DayStats extends StatelessWidget {
     required this.onAll,
   });
 
-  Widget _tile(IconData icon, String label, int value, VoidCallback onTap) {
+  Widget _tile(
+    S s,
+    IconData icon,
+    String label,
+    int value,
+    VoidCallback onTap,
+  ) {
     final fg = theme.onBackground;
     return Expanded(
       child: Material(
@@ -627,7 +683,7 @@ class DayStats extends StatelessWidget {
                         fit: BoxFit.scaleDown,
                         alignment: Alignment.centerLeft,
                         child: Text(
-                          NumberFormat.decimalPattern().format(value),
+                          s.n(value),
                           style: TextStyle(
                             color: fg,
                             fontSize: 18,
@@ -653,13 +709,14 @@ class DayStats extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
-          _tile(Icons.today, 'TODAY', today, onToday),
+          _tile(s, Icons.today, s.tileToday, today, onToday),
           const SizedBox(width: 10),
-          _tile(Icons.all_inclusive, 'ALL TOTAL', all, onAll),
+          _tile(s, Icons.all_inclusive, s.tileAll, all, onAll),
         ],
       ),
     );
@@ -689,7 +746,7 @@ class CopyrightFooter extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
+            child: Text(S.of(ctx).close),
           ),
           FilledButton.icon(
             onPressed: () {
@@ -699,13 +756,13 @@ class CopyrightFooter extends StatelessWidget {
                 ..hideCurrentSnackBar()
                 ..showSnackBar(
                   SnackBar(
-                    content: Text('Copied $value'),
+                    content: Text(S.of(context).copied(value)),
                     duration: const Duration(seconds: 2),
                   ),
                 );
             },
             icon: const Icon(Icons.copy, size: 18),
-            label: const Text('Copy'),
+            label: Text(S.of(ctx).copy),
           ),
         ],
       ),
@@ -715,24 +772,25 @@ class CopyrightFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fg = theme.onBackground.withValues(alpha: 0.85);
+    final s = S.of(context);
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Text(
-          '\u00a9 ${DateTime.now().year} Zikir',
+          s.copyright(DateTime.now().year),
           style: TextStyle(color: fg, fontSize: 11),
         ),
         IconButton(
-          tooltip: 'Email',
+          tooltip: s.email,
           visualDensity: VisualDensity.compact,
           icon: Icon(Icons.email_outlined, size: 20, color: fg),
-          onPressed: () => _show(context, Icons.email_outlined, 'Email', email),
+          onPressed: () => _show(context, Icons.email_outlined, s.email, email),
         ),
         IconButton(
-          tooltip: 'Phone',
+          tooltip: s.phone,
           visualDensity: VisualDensity.compact,
           icon: Icon(Icons.phone_outlined, size: 20, color: fg),
-          onPressed: () => _show(context, Icons.phone_outlined, 'Phone', phone),
+          onPressed: () => _show(context, Icons.phone_outlined, s.phone, phone),
         ),
       ],
     );
@@ -772,8 +830,9 @@ class _PickCategoryDialogState extends State<PickCategoryDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return AlertDialog(
-      title: const Text('Choose zikir'),
+      title: Text(s.chooseZikir),
       content: SizedBox(
         width: double.maxFinite,
         child: _adding
@@ -783,33 +842,25 @@ class _PickCategoryDialogState extends State<PickCategoryDialog> {
                   TextField(
                     controller: _name,
                     autofocus: true,
-                    decoration: const InputDecoration(
-                      labelText: 'New zikir name',
-                    ),
+                    decoration: InputDecoration(labelText: s.newZikirName),
                   ),
                   TextField(
                     controller: _meaning,
                     minLines: 2,
                     maxLines: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'অর্থ (meaning, optional)',
-                    ),
+                    decoration: InputDecoration(labelText: s.meaningOptional),
                   ),
                   TextField(
                     controller: _goal,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    decoration: const InputDecoration(
-                      labelText: 'Target count (optional)',
-                    ),
+                    decoration: InputDecoration(labelText: s.targetOptional),
                   ),
                   TextField(
                     controller: _beep,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    decoration: const InputDecoration(
-                      labelText: 'Beep every (optional)',
-                    ),
+                    decoration: InputDecoration(labelText: s.beepOptional),
                   ),
                 ],
               )
@@ -821,11 +872,11 @@ class _PickCategoryDialogState extends State<PickCategoryDialog> {
                   return ListTile(
                     dense: true,
                     selected: c.id == widget.currentId,
-                    leading: CircleAvatar(radius: 12, child: Text('${i + 1}')),
-                    title: Text(c.name),
+                    leading: CircleAvatar(radius: 12, child: Text(s.n(i + 1))),
+                    title: Text(s.zikirName(c.name)),
                     subtitle: c.targetLabel.isEmpty
                         ? null
-                        : Text('সংখ্যা: ${c.targetLabel}'),
+                        : Text(s.countChip(c.targetLabel)),
                     onTap: () => Navigator.pop(context, c.id),
                   );
                 },
@@ -834,14 +885,14 @@ class _PickCategoryDialogState extends State<PickCategoryDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: Text(s.cancel),
         ),
         if (_adding)
-          FilledButton(onPressed: _add, child: const Text('Add'))
+          FilledButton(onPressed: _add, child: Text(s.add))
         else
           TextButton(
             onPressed: () => setState(() => _adding = true),
-            child: const Text('+ New'),
+            child: Text(s.plusNew),
           ),
       ],
     );

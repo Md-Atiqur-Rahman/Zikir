@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
 
 import 'db.dart';
-
-String fmt(int n) => NumberFormat.decimalPattern().format(n);
+import 'l10n.dart';
 
 class SummaryPage extends StatefulWidget {
   const SummaryPage({super.key});
@@ -26,6 +24,7 @@ class _SummaryPageState extends State<SummaryPage> {
   Future<void> _load() async {
     final cats = await Db.categories();
     final total = await Db.grandTotal();
+    if (!mounted) return;
     setState(() {
       _cats = cats;
       _total = total;
@@ -35,12 +34,13 @@ class _SummaryPageState extends State<SummaryPage> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final s = S.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Summary'),
+        title: Text(s.summary),
         actions: [
           IconButton(
-            tooltip: 'Day-wise',
+            tooltip: s.dayWise,
             icon: const Icon(Icons.calendar_month),
             onPressed: () async {
               await Navigator.push(
@@ -65,7 +65,7 @@ class _SummaryPageState extends State<SummaryPage> {
               borderRadius: BorderRadius.circular(16),
             ),
             child: Text(
-              'Total zikir = ${fmt(_total)}',
+              s.totalZikir(_total),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleLarge
                   ?.copyWith(fontWeight: FontWeight.bold),
@@ -76,9 +76,9 @@ class _SummaryPageState extends State<SummaryPage> {
               children: _cats
                   .map(
                     (c) => ListTile(
-                      title: Text(c.name),
+                      title: Text(s.zikirName(c.name)),
                       trailing: Text(
-                        fmt(c.total),
+                        s.n(c.total),
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
@@ -127,6 +127,7 @@ class _CategoryPageState extends State<CategoryPage> {
     final entries = await Db.days(widget.category.id);
     final total = await Db.categoryTotal(widget.category.id);
     final prayers = await Db.prayers();
+    if (!mounted) return;
     setState(() {
       _entries = entries;
       _total = total;
@@ -135,21 +136,20 @@ class _CategoryPageState extends State<CategoryPage> {
   }
 
   Future<void> _delete() async {
+    final s = S.of(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: Text('Delete ${widget.category.name}?'),
-        content: const Text(
-          'All saved counts in this category will be removed.',
-        ),
+        title: Text(s.deleteTitle(s.zikirName(widget.category.name))),
+        content: Text(s.deleteBody),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(c, false),
-            child: const Text('Cancel'),
+            child: Text(s.cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(c, true),
-            child: const Text('Delete'),
+            child: Text(s.delete),
           ),
         ],
       ),
@@ -162,7 +162,8 @@ class _CategoryPageState extends State<CategoryPage> {
 
   @override
   Widget build(BuildContext context) {
-    final name = widget.category.name;
+    final s0 = S.of(context);
+    final name = s0.zikirName(widget.category.name);
     final theme = Theme.of(context);
 
     // month -> date -> entries (entries arrive newest day first)
@@ -187,12 +188,11 @@ class _CategoryPageState extends State<CategoryPage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                DateFormat('MMMM yyyy')
-                    .format(DateTime.parse('${month.key}-01')),
+                s0.date('MMMM yyyy', DateTime.parse('${month.key}-01')),
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               Text(
-                'Total ${fmt(monthSum)}',
+                s0.totalN(monthSum),
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ],
@@ -220,11 +220,11 @@ class _CategoryPageState extends State<CategoryPage> {
               _load();
             },
             title: Text(
-              '$name  ${DateFormat('d MMM').format(DateTime.parse(day.key))}',
+              '$name  ${s0.date('d MMM', DateTime.parse(day.key))}',
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             trailing: Text(
-              'total count ${fmt(dayTotal)}',
+              s0.totalCountN(dayTotal),
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
@@ -235,7 +235,7 @@ class _CategoryPageState extends State<CategoryPage> {
               padding: const EdgeInsets.only(left: 32, right: 16, bottom: 4),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [Text(e.prayer), Text(fmt(e.count))],
+                children: [Text(s0.prayer(e.prayer)), Text(s0.n(e.count))],
               ),
             ),
           );
@@ -259,16 +259,16 @@ class _CategoryPageState extends State<CategoryPage> {
           Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              'Total $name count = ${fmt(_total)}',
+              s0.categoryTotal(name, _total),
               style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
             ),
           ),
           if (items.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('No entries in the last 6 months.'),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(s0.noEntries6),
             ),
           ...items,
         ],
@@ -346,6 +346,7 @@ class _DayPageState extends State<DayPage> {
   Future<void> _load() async {
     final rows = await Db.dayRows(ymd(_date));
     final prayers = await Db.prayers();
+    if (!mounted) return;
     setState(() {
       _rows = rows;
       _prayerOrder = {for (final p in prayers) p.name: p.ord};
@@ -382,7 +383,8 @@ class _DayPageState extends State<DayPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final total = _rows.fold(0, (s, r) => s + r.count);
+    final s = S.of(context);
+    final total = _rows.fold(0, (a, r) => a + r.count);
 
     // all-day rows per zikir, in queue order
     final byZikir = <int, List<DayRow>>{};
@@ -411,7 +413,7 @@ class _DayPageState extends State<DayPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            fmt(count),
+            s.n(count),
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
           if (onTap != null) ...[
@@ -454,7 +456,7 @@ class _DayPageState extends State<DayPage> {
               ),
             ),
             Text(
-              fmt(sum),
+              s.n(sum),
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
           ],
@@ -469,11 +471,15 @@ class _DayPageState extends State<DayPage> {
       items.add(
         group(
           'p:$name',
-          name.isEmpty ? 'অন্য সময় (no prayer)' : name,
-          rows.fold(0, (s, r) => s + r.count),
+          name.isEmpty ? s.unnamedPrayer : s.prayer(name),
+          rows.fold(0, (a, r) => a + r.count),
           [
             for (final r in rows)
-              line(r.name, r.count, onTap: _editable ? () => _edit(r) : null),
+              line(
+                s.zikirName(r.name),
+                r.count,
+                onTap: _editable ? () => _edit(r) : null,
+              ),
           ],
         ),
       );
@@ -482,16 +488,19 @@ class _DayPageState extends State<DayPage> {
     // with none it would only repeat the group above
     if (_rows.isNotEmpty && !onlyUnnamed) {
       items.add(
-        group('day', 'সারাদিনের মোট (Day total)', total, [
+        group('day', s.dayTotalTitle, total, [
           for (final rows in byZikir.values)
-            line(rows.first.name, rows.fold(0, (s, r) => s + r.count)),
+            line(
+              s.zikirName(rows.first.name),
+              rows.fold(0, (a, r) => a + r.count),
+            ),
         ]),
       );
     }
     if (items.isNotEmpty) items.add(const SizedBox(height: 16));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Day-wise')),
+      appBar: AppBar(title: Text(s.dayWise)),
       body: Column(
         children: [
           Padding(
@@ -499,7 +508,7 @@ class _DayPageState extends State<DayPage> {
             child: Row(
               children: [
                 IconButton(
-                  tooltip: 'Previous day',
+                  tooltip: s.prevDay,
                   icon: const Icon(Icons.chevron_left),
                   onPressed: _date.isAfter(_oldest)
                       ? () => _go(_date.subtract(const Duration(days: 1)))
@@ -509,11 +518,11 @@ class _DayPageState extends State<DayPage> {
                   child: TextButton.icon(
                     onPressed: _pick,
                     icon: const Icon(Icons.calendar_month),
-                    label: Text(DateFormat('EEE, d MMM yyyy').format(_date)),
+                    label: Text(s.date('EEE, d MMM yyyy', _date)),
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Next day',
+                  tooltip: s.nextDay,
                   icon: const Icon(Icons.chevron_right),
                   onPressed: _date.isBefore(_today)
                       ? () => _go(_date.add(const Duration(days: 1)))
@@ -531,7 +540,7 @@ class _DayPageState extends State<DayPage> {
               borderRadius: BorderRadius.circular(16),
             ),
             child: Text(
-              'Total = ${fmt(total)}   (${byZikir.length} zikir)',
+              s.dayHeader(total, byZikir.length),
               textAlign: TextAlign.center,
               style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.bold,
@@ -542,7 +551,7 @@ class _DayPageState extends State<DayPage> {
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Text(
-                'Older than $editableDays days: view only.',
+                s.readOnly(editableDays),
                 key: const Key('read-only-note'),
                 style: theme.textTheme.bodySmall,
               ),
@@ -551,7 +560,7 @@ class _DayPageState extends State<DayPage> {
             child: !_loaded
                 ? const SizedBox.shrink()
                 : items.isEmpty
-                ? const Center(child: Text('Nothing saved on this day.'))
+                ? Center(child: Text(s.nothingOnDay))
                 : ListView(children: items),
           ),
         ],
@@ -589,12 +598,17 @@ class _EditCountDialogState extends State<_EditCountDialog> {
   @override
   Widget build(BuildContext context) {
     final r = widget.row;
+    final s = S.of(context);
     final where = [
-      if (r.prayer.isNotEmpty) r.prayer,
-      DateFormat('d MMM yyyy').format(widget.date),
+      if (r.prayer.isNotEmpty) s.prayer(r.prayer),
+      s.date('d MMM yyyy', widget.date),
     ].join('  \u00b7  ');
     return AlertDialog(
-      title: Text(r.name, maxLines: 3, overflow: TextOverflow.ellipsis),
+      title: Text(
+        s.zikirName(r.name),
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -605,7 +619,7 @@ class _EditCountDialogState extends State<_EditCountDialog> {
             children: [
               IconButton.filledTonal(
                 key: const Key('count-minus'),
-                tooltip: 'Less',
+                tooltip: s.less,
                 icon: const Icon(Icons.remove),
                 onPressed: _value > 0 ? () => _bump(-1) : null,
               ),
@@ -626,7 +640,7 @@ class _EditCountDialogState extends State<_EditCountDialog> {
               ),
               IconButton.filledTonal(
                 key: const Key('count-plus'),
-                tooltip: 'More',
+                tooltip: s.more,
                 icon: const Icon(Icons.add),
                 onPressed: () => _bump(1),
               ),
@@ -634,9 +648,7 @@ class _EditCountDialogState extends State<_EditCountDialog> {
           ),
           const SizedBox(height: 8),
           Text(
-            _value == 0
-                ? 'Saving 0 removes this entry.'
-                : 'Was ${fmt(r.count)}',
+            _value == 0 ? s.savingZero : s.was(r.count),
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -644,11 +656,11 @@ class _EditCountDialogState extends State<_EditCountDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: Text(s.cancel),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, _value),
-          child: const Text('Save'),
+          child: Text(s.save),
         ),
       ],
     );
@@ -677,6 +689,7 @@ class _BarTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final s = S.of(context);
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
       elevation: 0,
@@ -715,7 +728,7 @@ class _BarTile extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Text(
-                fmt(value),
+                s.n(value),
                 style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
@@ -794,6 +807,7 @@ class _MonthsPageState extends State<MonthsPage> {
     );
     final lastDate = await Db.lastDayBefore(today);
     final lastTotal = lastDate == null ? 0 : await Db.dayTotal(lastDate);
+    if (!mounted) return;
     setState(() {
       _months = months;
       _total = total;
@@ -821,7 +835,7 @@ class _MonthsPageState extends State<MonthsPage> {
               Text(label, style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 2),
               Text(
-                fmt(value),
+                S.of(context).n(value),
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -838,19 +852,18 @@ class _MonthsPageState extends State<MonthsPage> {
   Widget build(BuildContext context) {
     final maxValue = _months.fold(0, (m, e) => e.$2 > m ? e.$2 : m);
     final last = _lastDate == null ? null : DateTime.parse(_lastDate!);
+    final s = S.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('All total')),
+      appBar: AppBar(title: Text(s.allTotal)),
       body: ListView(
         children: [
-          _TotalHeader('Total zikir = ${fmt(_total)}'),
+          _TotalHeader(s.totalZikir(_total)),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
                 _mini(
-                  last == null
-                      ? 'Last day'
-                      : 'Last day · ${DateFormat('d MMM').format(last)}',
+                  last == null ? s.lastDay : s.lastDayOn(s.date('d MMM', last)),
                   _lastTotal,
                   onTap: last == null
                       ? null
@@ -865,16 +878,16 @@ class _MonthsPageState extends State<MonthsPage> {
                         },
                 ),
                 const SizedBox(width: 8),
-                _mini('This week', _week),
+                _mini(s.thisWeek, _week),
                 const SizedBox(width: 8),
-                _mini('This month', _month),
+                _mini(s.thisMonth, _month),
               ],
             ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 16, 4),
             child: Text(
-              'Month-wise  (tap a month for its weeks)',
+              s.monthWise,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.bold,
                 color: Theme.of(context).colorScheme.primary,
@@ -882,14 +895,13 @@ class _MonthsPageState extends State<MonthsPage> {
             ),
           ),
           if (_loaded && _months.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(20),
-              child: Text('Nothing saved yet.'),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Text(s.nothingYet),
             ),
           for (final m in _months)
             _BarTile(
-              title: DateFormat('MMMM yyyy')
-                  .format(DateTime.parse('${m.$1}-01')),
+              title: s.date('MMMM yyyy', DateTime.parse('${m.$1}-01')),
               value: m.$2,
               max: maxValue,
               onTap: () async {
@@ -955,6 +967,7 @@ class _WeeksPageState extends State<WeeksPage> {
       weeks.add(w);
       start = end.add(const Duration(days: 1));
     }
+    if (!mounted) return;
     setState(() {
       _weeks = weeks;
       _total = daily.values.fold(0, (a, b) => a + b);
@@ -964,19 +977,20 @@ class _WeeksPageState extends State<WeeksPage> {
   @override
   Widget build(BuildContext context) {
     final maxValue = _weeks.fold(0, (m, w) => w.total > m ? w.total : m);
-    final f = DateFormat('d MMM');
+    final s = S.of(context);
+    String f(DateTime d) => s.date('d MMM', d);
     final numbered = [
       for (var i = 0; i < _weeks.length; i++) (i + 1, _weeks[i]),
     ];
     return Scaffold(
-      appBar: AppBar(title: Text(DateFormat('MMMM yyyy').format(_first))),
+      appBar: AppBar(title: Text(s.date('MMMM yyyy', _first))),
       body: ListView(
         children: [
-          _TotalHeader('Month total = ${fmt(_total)}'),
+          _TotalHeader(s.monthTotal(_total)),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 16, 4),
             child: Text(
-              'Week-wise  (tap a week for its days)',
+              s.weekWise,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.bold,
                 color: Theme.of(context).colorScheme.primary,
@@ -985,8 +999,8 @@ class _WeeksPageState extends State<WeeksPage> {
           ),
           for (final (n, w) in numbered.reversed)
             _BarTile(
-              title: 'Week $n',
-              subtitle: '${f.format(w.from)} – ${f.format(w.to)}',
+              title: s.week(n),
+              subtitle: '${f(w.from)} – ${f(w.to)}',
               value: w.total,
               max: maxValue,
               onTap: () async {
@@ -994,7 +1008,7 @@ class _WeeksPageState extends State<WeeksPage> {
                   context,
                   MaterialPageRoute(
                     builder: (_) =>
-                        DaysListPage(title: 'Week $n', from: w.from, to: w.to),
+                        DaysListPage(weekNumber: n, from: w.from, to: w.to),
                   ),
                 );
                 _load();
@@ -1009,12 +1023,12 @@ class _WeeksPageState extends State<WeeksPage> {
 
 /// The days of one week with their counts; tap a day for its zikirs.
 class DaysListPage extends StatefulWidget {
-  final String title;
+  final int weekNumber;
   final DateTime from;
   final DateTime to;
   const DaysListPage({
     super.key,
-    required this.title,
+    required this.weekNumber,
     required this.from,
     required this.to,
   });
@@ -1034,6 +1048,7 @@ class _DaysListPageState extends State<DaysListPage> {
 
   Future<void> _load() async {
     final d = await Db.dailyTotals(ymd(widget.from), ymd(widget.to));
+    if (mounted) if (!mounted) return;
     if (mounted) setState(() => _daily = d);
   }
 
@@ -1049,15 +1064,16 @@ class _DaysListPageState extends State<DaysListPage> {
     }
     final maxValue = _daily.values.fold(0, (m, v) => v > m ? v : m);
     final total = _daily.values.fold(0, (a, b) => a + b);
+    final s = S.of(context);
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: AppBar(title: Text(s.week(widget.weekNumber))),
       body: ListView(
         children: [
-          _TotalHeader('Week total = ${fmt(total)}'),
+          _TotalHeader(s.weekTotal(total)),
           for (final d in days)
             _BarTile(
-              title: DateFormat('EEEE').format(d),
-              subtitle: DateFormat('d MMM yyyy').format(d),
+              title: s.date('EEEE', d),
+              subtitle: s.date('d MMM yyyy', d),
               value: _daily[ymd(d)] ?? 0,
               max: maxValue,
               onTap: (_daily[ymd(d)] ?? 0) == 0
@@ -1121,6 +1137,7 @@ class _BulkImportPageState extends State<BulkImportPage> {
       _ctl[c.id] = TextEditingController(text: n > 0 ? '$n' : '');
       _on[c.id] = n > 0;
     }
+    if (!mounted) return;
     setState(() {
       _cats = cats;
       _prayers = prayers;
@@ -1164,25 +1181,25 @@ class _BulkImportPageState extends State<BulkImportPage> {
     final counts = _counts;
     final perDay = counts.values.fold(0, (a, b) => a + b);
     final total = perDay * _days;
-    final f = DateFormat('d MMM yyyy');
+    final s = S.of(context);
+    String f(DateTime d) => s.date('d MMM yyyy', d);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Add to history?'),
+        title: Text(s.bulkAskTitle),
         content: Text(
-          '${counts.length} zikirs \u00d7 $_days days '
-          '(${f.format(_from)} \u2013 ${f.format(_to)})\n'
-          'Total to add: ${fmt(total)}\n\n'
-          'This is added on top of anything already saved on those days.',
+          '${s.bulkSummary(counts.length, _days, f(_from), f(_to))}\n'
+          '${s.bulkTotalToAdd(total)}\n\n'
+          '${s.bulkOnTop}',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(s.cancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Add'),
+            child: Text(s.add),
           ),
         ],
       ),
@@ -1191,9 +1208,8 @@ class _BulkImportPageState extends State<BulkImportPage> {
     setState(() => _saving = true);
     await Db.bulkAdd(_from, _to, counts, _prayer);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Added ${fmt(total)} to the history')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(s.bulkAdded(total))));
     Navigator.pop(context);
   }
 
@@ -1201,19 +1217,18 @@ class _BulkImportPageState extends State<BulkImportPage> {
   Widget build(BuildContext context) {
     final counts = _counts;
     final perDay = counts.values.fold(0, (a, b) => a + b);
-    final f = DateFormat('d MMM yyyy');
+    final s = S.of(context);
+    String f(DateTime d) => s.date('d MMM yyyy', d);
     return Scaffold(
-      appBar: AppBar(title: const Text('Bulk import')),
+      appBar: AppBar(title: Text(s.bulkTitle)),
       body: _cats.isEmpty
           ? const SizedBox.shrink()
           : ListView(
               padding: const EdgeInsets.only(bottom: 24),
               children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-                  child: Text(
-                    'Every selected zikir gets its count on every day of the range.',
-                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Text(s.bulkIntro),
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -1223,7 +1238,7 @@ class _BulkImportPageState extends State<BulkImportPage> {
                         child: OutlinedButton.icon(
                           onPressed: () => _pickDate(from: true),
                           icon: const Icon(Icons.event),
-                          label: Text('From  ${f.format(_from)}'),
+                          label: Text(s.bulkFrom(f(_from))),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -1231,7 +1246,7 @@ class _BulkImportPageState extends State<BulkImportPage> {
                         child: OutlinedButton.icon(
                           onPressed: () => _pickDate(from: false),
                           icon: const Icon(Icons.event),
-                          label: Text('To  ${f.format(_to)}'),
+                          label: Text(s.bulkTo(f(_to))),
                         ),
                       ),
                     ],
@@ -1241,19 +1256,22 @@ class _BulkImportPageState extends State<BulkImportPage> {
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                   child: DropdownButtonFormField<String>(
                     initialValue: _prayer,
-                    decoration: const InputDecoration(
-                      labelText: 'Save under prayer time',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: s.bulkSaveUnder,
+                      border: const OutlineInputBorder(),
                     ),
                     items: [
-                      const DropdownMenuItem(value: '', child: Text('None')),
+                      DropdownMenuItem(value: '', child: Text(s.none)),
                       for (final p in _prayers)
-                        DropdownMenuItem(value: p.name, child: Text(p.name)),
+                        DropdownMenuItem(
+                          value: p.name,
+                          child: Text(s.prayer(p.name)),
+                        ),
                     ],
                     onChanged: (v) => setState(() => _prayer = v ?? ''),
                   ),
                 ),
-                const _SectionHeader('Zikir  \u2013  count per day', ''),
+                _SectionHeader(s.bulkSection, ''),
                 for (final c in _cats)
                   ListTile(
                     contentPadding: const EdgeInsets.only(left: 4, right: 16),
@@ -1262,7 +1280,7 @@ class _BulkImportPageState extends State<BulkImportPage> {
                       onChanged: (v) => setState(() => _on[c.id] = v ?? false),
                     ),
                     title: Text(
-                      c.name,
+                      s.zikirName(c.name),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -1293,15 +1311,12 @@ class _BulkImportPageState extends State<BulkImportPage> {
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  '${counts.length} zikirs \u00d7 $_days days\n'
-                  'Total ${fmt(perDay * _days)}',
-                ),
+                child: Text(s.bulkBottom(counts.length, _days, perDay * _days)),
               ),
               FilledButton.icon(
                 onPressed: (_saving || counts.isEmpty) ? null : _import,
                 icon: const Icon(Icons.playlist_add),
-                label: const Text('Add to history'),
+                label: Text(s.bulkAddButton),
               ),
             ],
           ),
@@ -1330,6 +1345,7 @@ class _ZikirListPageState extends State<ZikirListPage> {
 
   Future<void> _load() async {
     final cats = await Db.categories();
+    if (!mounted) return;
     setState(() => _cats = cats);
   }
 
@@ -1342,10 +1358,11 @@ class _ZikirListPageState extends State<ZikirListPage> {
       text: (c?.beepEvery ?? 0) > 0 ? '${c!.beepEvery}' : '',
     );
     final meaning = TextEditingController(text: c?.meaning);
+    final s = S.of(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(c == null ? 'Add zikir' : 'Edit zikir'),
+        title: Text(c == null ? s.addZikir : s.editZikir),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1353,15 +1370,15 @@ class _ZikirListPageState extends State<ZikirListPage> {
               TextField(
                 controller: name,
                 autofocus: true,
-                decoration: const InputDecoration(labelText: 'Name'),
+                decoration: InputDecoration(labelText: s.name),
               ),
               TextField(
                 controller: meaning,
                 minLines: 2,
                 maxLines: 5,
-                decoration: const InputDecoration(
-                  labelText: 'অর্থ (meaning)',
-                  hintText: 'Shown under the zikir on the counter',
+                decoration: InputDecoration(
+                  labelText: s.meaning,
+                  hintText: s.meaningHint,
                 ),
               ),
               TextField(
@@ -1369,19 +1386,19 @@ class _ZikirListPageState extends State<ZikirListPage> {
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 decoration: InputDecoration(
-                  labelText: 'Target count (optional)',
-                  hintText: 'e.g. 100',
-                  helperText: 'Beep + long vibration when you reach it',
+                  labelText: s.targetOptional,
+                  hintText: s.targetHint,
+                  helperText: s.targetHelper,
                 ),
               ),
               TextField(
                 controller: beep,
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(
-                  labelText: 'Beep every (optional)',
-                  hintText: 'e.g. 20',
-                  helperText: 'A short beep after every N counts',
+                decoration: InputDecoration(
+                  labelText: s.beepOptional,
+                  hintText: s.beepHint,
+                  helperText: s.beepHelper,
                 ),
               ),
             ],
@@ -1390,11 +1407,11 @@ class _ZikirListPageState extends State<ZikirListPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(s.cancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Save'),
+            child: Text(s.save),
           ),
         ],
       ),
@@ -1427,21 +1444,20 @@ class _ZikirListPageState extends State<ZikirListPage> {
   }
 
   Future<void> _delete(Category c) async {
+    final s = S.of(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Delete ${c.name}?'),
-        content: const Text(
-          'All saved counts in this category will be removed.',
-        ),
+        title: Text(s.deleteTitle(s.zikirName(c.name))),
+        content: Text(s.deleteBody),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(s.cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
+            child: Text(s.delete),
           ),
         ],
       ),
@@ -1454,18 +1470,17 @@ class _ZikirListPageState extends State<ZikirListPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('জিকিরের তালিকা'),
+        title: Text(s.listTitle),
         actions: [IconButton(icon: const Icon(Icons.add), onPressed: _edit)],
       ),
       body: Column(
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text(
-              'Drag to set the order. After you reset, the next zikir in this list is selected.',
-            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text(s.dragHint),
           ),
           Expanded(
             child: ReorderableListView.builder(
@@ -1481,16 +1496,17 @@ class _ZikirListPageState extends State<ZikirListPage> {
                 final c = _cats[i];
                 return ListTile(
                   key: ValueKey(c.id),
-                  leading: CircleAvatar(radius: 14, child: Text('${i + 1}')),
-                  title: Text(c.name),
+                  leading: CircleAvatar(radius: 14, child: Text(s.n(i + 1))),
+                  title: Text(s.zikirName(c.name)),
                   subtitle: (c.meaning.isEmpty && c.targetLabel.isEmpty)
                       ? null
                       : Text(
                           [
-                            if (c.meaning.isNotEmpty) c.meaning,
+                            if (c.meaning.isNotEmpty)
+                              s.zikirMeaning(c.name, c.meaning),
                             if (c.targetLabel.isNotEmpty)
-                              'সংখ্যা: ${c.targetLabel}'
-                                  '${c.beepEvery > 0 ? '  •  প্রতি ${c.beepEvery} বারে বিপ' : ''}',
+                              '${s.countChip(c.targetLabel)}'
+                                  '${c.beepEvery > 0 ? s.beepEveryLabel(c.beepEvery) : ''}',
                           ].join('\n'),
                         ),
                   onTap: () => _edit(c),
@@ -1534,7 +1550,9 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
   @override
   void initState() {
     super.initState();
-    Db.prayers().then((p) => setState(() => _prayers = p));
+    Db.prayers().then((p) {
+      if (mounted) setState(() => _prayers = p);
+    });
   }
 
   String _label(int m) =>
@@ -1559,22 +1577,19 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('নামাজের সময়সূচী')),
+      appBar: AppBar(title: Text(s.prayerTimesTitle)),
       body: ListView(
         children: [
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text(
-              'A count is tagged with the prayer whose window contains the time you '
-              'started counting. A window can cross midnight (e.g. Isha 7:30 PM → 2:00 AM). '
-              'Times outside every window are saved without a prayer name.',
-            ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(s.prayerTimesHelp),
           ),
           for (final p in _prayers)
             ListTile(
               title: Text(
-                p.name,
+                s.prayer(p.name),
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               subtitle: Row(

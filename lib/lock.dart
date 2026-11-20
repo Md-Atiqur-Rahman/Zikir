@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'l10n.dart';
 import 'theme.dart';
 
 /// On/off switch for the "solve a sum to open the app" lock (on by default).
@@ -107,6 +108,7 @@ class _MathPadState extends State<MathPad> {
   @override
   Widget build(BuildContext context) {
     final fg = widget.color;
+    final s = S.of(context);
     Widget row(List<Widget> keys) => Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Row(
@@ -154,11 +156,11 @@ class _MathPadState extends State<MathPad> {
         SizedBox(
           height: 28,
           child: _wrong
-              ? const Center(
+              ? Center(
                   child: Text(
-                    'Wrong. Here is a new one.',
-                    key: Key('math-wrong'),
-                    style: TextStyle(color: Colors.redAccent),
+                    s.lockWrong,
+                    key: const Key('math-wrong'),
+                    style: const TextStyle(color: Colors.redAccent),
                   ),
                 )
               : null,
@@ -202,7 +204,7 @@ class LockScreen extends StatelessWidget {
                   Icon(Icons.lock_outline, size: 52, color: t.onBackground),
                   const SizedBox(height: 8),
                   Text(
-                    'Zikir',
+                    S.of(context).appName,
                     style: TextStyle(
                       color: t.onBackground,
                       fontSize: 26,
@@ -210,7 +212,7 @@ class LockScreen extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    'Solve the sum to open',
+                    S.of(context).lockSolveToOpen,
                     style: TextStyle(
                       color: t.onBackground.withValues(alpha: 0.85),
                     ),
@@ -327,7 +329,7 @@ class _LockSettingsState extends State<_LockSettings> {
       final solved = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Solve to turn the lock off'),
+          title: Text(S.of(ctx).lockSolveToOff),
           // scrolls on short screens (landscape) instead of overflowing
           content: SingleChildScrollView(
             child: MathPad(
@@ -338,7 +340,7 @@ class _LockSettingsState extends State<_LockSettings> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
+              child: Text(S.of(ctx).cancel),
             ),
           ],
         ),
@@ -351,21 +353,20 @@ class _LockSettingsState extends State<_LockSettings> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return AlertDialog(
-      title: const Text('App lock'),
+      title: Text(s.lockTitle),
       content: SwitchListTile(
         contentPadding: EdgeInsets.zero,
-        title: const Text('Ask a sum to open the app'),
-        subtitle: const Text(
-          'Keeps children out. Locks again after the app was away for 1 minute.',
-        ),
+        title: Text(s.lockSwitch),
+        subtitle: Text(s.lockHint),
         value: AppLock.enabled.value,
         onChanged: _change,
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Close'),
+          child: Text(s.close),
         ),
       ],
     );

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'l10n.dart';
+
 /// Every colour the counter screen uses, in the order of [ZikirTheme.labels].
 class ZikirTheme {
   final String name;
@@ -167,21 +169,24 @@ class ThemePage extends StatelessWidget {
   Future<void> _edit(BuildContext context, ZikirTheme t, int i) async {
     final c = await showDialog<Color>(
       context: context,
-      builder: (_) =>
-          _ColorDialog(title: ZikirTheme.labels[i], initial: t.colors[i]),
+      builder: (_) => _ColorDialog(
+        title: S.of(context).themeColor(i),
+        initial: t.colors[i],
+      ),
     );
     if (c != null) themeController.set(t.withColor(i, c));
   }
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return ValueListenableBuilder<ZikirTheme>(
       valueListenable: themeController,
       builder: (context, t, _) => Scaffold(
-        appBar: AppBar(title: const Text('Theme')),
+        appBar: AppBar(title: Text(s.themeTitle)),
         body: ListView(
           children: [
-            const _Header('Ready-made themes'),
+            _Header(s.readyMade),
             for (final p in ZikirTheme.presets)
               ListTile(
                 leading: _Swatches([
@@ -190,11 +195,11 @@ class ThemePage extends StatelessWidget {
                   p.lcdBg,
                   p.glowCount,
                 ]),
-                title: Text(p.name),
+                title: Text(s.themeName(p.name)),
                 trailing: t.sameAs(p) ? const Icon(Icons.check_circle) : null,
                 onTap: () => themeController.set(p),
               ),
-            _Header('Make your own  (now: ${t.name})'),
+            _Header(s.makeOwn(s.themeName(t.name))),
             for (var i = 0; i < ZikirTheme.labels.length; i++)
               ListTile(
                 leading: Container(
@@ -206,7 +211,7 @@ class ThemePage extends StatelessWidget {
                     border: Border.all(color: Colors.grey, width: 1),
                   ),
                 ),
-                title: Text(ZikirTheme.labels[i]),
+                title: Text(s.themeColor(i)),
                 trailing: Text('#${_hex(t.colors[i])}'),
                 onTap: () => _edit(context, t, i),
               ),
@@ -381,11 +386,11 @@ class _ColorDialogState extends State<_ColorDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: Text(S.of(context).cancel),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, _color),
-          child: const Text('Select'),
+          child: Text(S.of(context).select),
         ),
       ],
     );

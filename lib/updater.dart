@@ -4,9 +4,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:intl/intl.dart';
 import 'package:ota_update/ota_update.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+
+import 'l10n.dart';
 
 /// Newest GitHub Release of the app; every release is tagged `build-<number>`.
 const _latestUrl =
@@ -25,7 +26,25 @@ int? buildFromTag(String tag) {
   return m == null ? null : int.parse(m.group(1)!);
 }
 
-/// Asks GitHub for the newest release. Throws a readable message when it can't.
+enum UpdateErrorKind { http, noApk, timeout }
+
+/// Why the check for a newer build failed; shown in the current language.
+class UpdateError implements Exception {
+  final UpdateErrorKind kind;
+  final int? code;
+  const UpdateError(this.kind, [this.code]);
+
+  String message(S s) => switch (kind) {
+    UpdateErrorKind.http => s.updHttp(code ?? 0),
+    UpdateErrorKind.noApk => s.updNoApk,
+    UpdateErrorKind.timeout => s.updTimeout,
+  };
+
+  @override
+  String toString() => message(S.en);
+}
+
+/// Asks GitHub for the newest release. Throws an [UpdateError] when it can't.
 Future<UpdateInfo> fetchLatest({http.Client? client}) async {
   final c = client ?? http.Client();
   try {
@@ -36,14 +55,14 @@ Future<UpdateInfo> fetchLatest({http.Client? client}) async {
         )
         .timeout(const Duration(seconds: 15));
     if (r.statusCode != 200) {
-      throw 'GitHub answered with code ${r.statusCode}';
+      throw UpdateError(UpdateErrorKind.http, r.statusCode);
     }
     final j = jsonDecode(r.body) as Map<String, dynamic>;
     final build = buildFromTag((j['tag_name'] as String?) ?? '');
     final assets = ((j['assets'] as List?) ?? const []).cast<Map>();
     final apk = assets.where((a) => '${a['name']}'.endsWith('.apk'));
     if (build == null || apk.isEmpty) {
-      throw 'The latest release has no APK file';
+      throw const UpdateError(UpdateErrorKind.noApk);
     }
     return UpdateInfo(
       build,
@@ -51,7 +70,7 @@ Future<UpdateInfo> fetchLatest({http.Client? client}) async {
       DateTime.tryParse('${j['published_at']}'),
     );
   } on TimeoutException {
-    throw 'No answer from GitHub. Check your internet.';
+    throw const UpdateError(UpdateErrorKind.timeout);
   } finally {
     if (client == null) c.close();
   }
@@ -79,7 +98,7 @@ class _UpdatePageState extends State<UpdatePage> {
   _Phase _phase = _Phase.checking;
   int _installed = 0;
   UpdateInfo? _latest;
-  String _error = '';
+  String Function(S) _error = (s) => '';
   double? _progress; // 0..1 while downloading
   StreamSubscription<OtaEvent>? _sub;
 
@@ -109,7 +128,7 @@ class _UpdatePageState extends State<UpdatePage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        _error = e is UpdateError ? e.message : (s) => '$e';
         _phase = _Phase.error;
       });
     }
@@ -119,7 +138,7 @@ class _UpdatePageState extends State<UpdatePage> {
     final latest = _latest!;
     if (kIsWeb) {
       setState(() {
-        _error = 'Updating works only in the Android app.';
+        _error = (s) => s.updWebOnly;
         _phase = _Phase.error;
       });
       return;
@@ -149,19 +168,17 @@ class _UpdatePageState extends State<UpdatePage> {
                 setState(() => _phase = _Phase.installing);
               case OtaStatus.PERMISSION_NOT_GRANTED_ERROR:
                 setState(() {
-                  _error = 'Permission was not given. Allow Zikir to install apps, then try again.';
+                  _error = (s) => s.updPermission;
                   _phase = _Phase.error;
                 });
               case OtaStatus.DOWNLOAD_ERROR:
                 setState(() {
-                  _error =
-                      'The download failed. Check your internet and try again.';
+                  _error = (s) => s.updDownloadFailed;
                   _phase = _Phase.error;
                 });
               default:
                 setState(() {
-                  _error =
-                      'The update could not be installed (${event.status.name}).';
+                  _error = (s) => s.updInstallFailed(event.status.name);
                   _phase = _Phase.error;
                 });
             }
@@ -169,7 +186,7 @@ class _UpdatePageState extends State<UpdatePage> {
           onError: (Object e) {
             if (!mounted) return;
             setState(() {
-              _error = '$e';
+              _error = (s) => '$e';
               _phase = _Phase.error;
             });
           },
@@ -181,38 +198,36 @@ class _UpdatePageState extends State<UpdatePage> {
     final theme = Theme.of(context);
     final latest = _latest;
 
+    final s = S.of(context);
+    final published = latest?.published;
     final (IconData icon, String title, String body) = switch (_phase) {
-      _Phase.checking => (
-        Icons.sync,
-        'Checking...',
-        'Asking GitHub for the newest version.',
-      ),
+      _Phase.checking => (Icons.sync, s.updChecking, s.updAsking),
       _Phase.upToDate => (
         Icons.check_circle_outline,
-        'You are up to date',
-        'Installed: build $_installed',
+        s.updUpToDate,
+        s.updInstalled(_installed),
       ),
       _Phase.available => (
         Icons.system_update,
-        'Update available',
-        'Installed: build $_installed\nNew: build ${latest?.build}'
-            '${latest?.published == null ? '' : '  (${DateFormat('d MMM yyyy').format(latest!.published!.toLocal())})'}',
+        s.updAvailable,
+        '${s.updInstalled(_installed)}\n${s.updNew(latest?.build ?? 0)}'
+            '${published == null ? '' : '  (${s.date('d MMM yyyy', published.toLocal())})'}',
       ),
       _Phase.downloading => (
         Icons.downloading,
-        'Downloading build ${latest?.build}...',
-        _progress == null ? '' : '${(_progress! * 100).round()}%',
+        s.updDownloading(latest?.build),
+        _progress == null ? '' : s.digits('${(_progress! * 100).round()}%'),
       ),
       _Phase.installing => (
         Icons.install_mobile,
-        'Opening the installer',
-        'Tap Install on the screen Android shows. Your counts and settings are kept.',
+        s.updOpening,
+        s.updOpeningBody,
       ),
-      _Phase.error => (Icons.error_outline, 'Could not update', _error),
+      _Phase.error => (Icons.error_outline, s.updFailed, _error(s)),
     };
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Check for update')),
+      appBar: AppBar(title: Text(s.updateTitle)),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -237,19 +252,16 @@ class _UpdatePageState extends State<UpdatePage> {
               FilledButton.icon(
                 onPressed: _update,
                 icon: const Icon(Icons.download),
-                label: const Text('Update now'),
+                label: Text(s.updNow),
               ),
               const SizedBox(height: 12),
-              const Text(
-                'Android may ask you to allow Zikir to install apps the first time.',
-                textAlign: TextAlign.center,
-              ),
+              Text(s.updMayAsk, textAlign: TextAlign.center),
             ],
             if (_phase == _Phase.upToDate || _phase == _Phase.error)
               OutlinedButton.icon(
                 onPressed: _check,
                 icon: const Icon(Icons.refresh),
-                label: const Text('Check again'),
+                label: Text(s.updAgain),
               ),
           ],
         ),

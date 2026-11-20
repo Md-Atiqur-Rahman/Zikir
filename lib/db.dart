@@ -151,6 +151,12 @@ Map<String, (int, int, int)> get _planByName => {
 /// Count per day the bulk-import form pre-fills for [name]; 0 for custom zikirs.
 int defaultBulkCount(String name) => _planByName[name]?.$3 ?? 0;
 
+/// The built-in zikir names in queue order (used to translate them for display).
+List<String> get defaultZikirNames => [for (final z in _defaultZikirs) z.$1];
+
+/// The Bangla meaning that ships with a built-in zikir ('' for any other name).
+String defaultMeaningFor(String name) => _defaultMeanings[name] ?? '';
+
 // name, start, end in minutes since midnight
 const _defaultPrayers = <(String, int, int)>[
   ('ফজর', 5 * 60, 7 * 60),

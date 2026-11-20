@@ -44,6 +44,8 @@ dependencies:
   http: ^1.6.0
   package_info_plus: ^10.2.2
   ota_update: ^7.1.0
+  flutter_localizations:
+    sdk: flutter
 
 dev_dependencies:
   flutter_test:

@@ -5,6 +5,8 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'l10n.dart';
+
 class Tone {
   final String id;
   final String label;
@@ -186,6 +188,7 @@ class _SoundPageState extends State<SoundPage> {
     String selected,
     void Function(String) onPick,
   ) {
+    final s = S.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -213,9 +216,9 @@ class _SoundPageState extends State<SoundPage> {
               for (final t in Beeper.tones)
                 RadioListTile<String>(
                   value: t.id,
-                  title: Text(t.label),
+                  title: Text(s.tone(t.id)),
                   secondary: IconButton(
-                    tooltip: 'Play',
+                    tooltip: s.play,
                     icon: const Icon(Icons.play_arrow),
                     onPressed: () => Beeper.play(t.id),
                   ),
@@ -229,29 +232,20 @@ class _SoundPageState extends State<SoundPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = S.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Sounds')),
+      appBar: AppBar(title: Text(s.soundsTitle)),
       body: ListView(
         children: [
-          _section(
-            'Beep every N counts',
-            'Plays at each interval you set for a zikir.',
-            Beeper.interval,
-            (id) {
-              Beeper.setInterval(id);
-              setState(() {});
-            },
-          ),
+          _section(s.intervalTitle, s.intervalHint, Beeper.interval, (id) {
+            Beeper.setInterval(id);
+            setState(() {});
+          }),
           const Divider(),
-          _section(
-            'Target reached',
-            'Plays when you reach the target count (with a long vibration).',
-            Beeper.done,
-            (id) {
-              Beeper.setDone(id);
-              setState(() {});
-            },
-          ),
+          _section(s.doneTitle, s.doneHint, Beeper.done, (id) {
+            Beeper.setDone(id);
+            setState(() {});
+          }),
           const SizedBox(height: 24),
         ],
       ),

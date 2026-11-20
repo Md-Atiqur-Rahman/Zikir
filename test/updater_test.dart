@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:digital_tasbih/l10n.dart';
 import 'package:digital_tasbih/updater.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,18 +42,37 @@ void main() {
   );
 
   test('fetchLatest explains problems instead of crashing', () async {
+    Matcher updateError(UpdateErrorKind kind, [int? code]) => isA<UpdateError>()
+        .having((e) => e.kind, 'kind', kind)
+        .having((e) => e.code, 'code', code);
+
     await expectLater(
       fetchLatest(client: fake(403, {'message': 'rate limit'})),
-      throwsA(contains('403')),
+      throwsA(updateError(UpdateErrorKind.http, 403)),
     );
     await expectLater(
       fetchLatest(client: fake(200, release('nightly'))),
-      throwsA(contains('no APK')),
+      throwsA(updateError(UpdateErrorKind.noApk)),
     );
     await expectLater(
       fetchLatest(client: fake(200, release('build-9', assets: ['notes.txt']))),
-      throwsA(contains('no APK')),
+      throwsA(updateError(UpdateErrorKind.noApk)),
     );
+  });
+
+  test('update errors read well in both languages', () {
+    const http = UpdateError(UpdateErrorKind.http, 403);
+    expect(http.message(S.en), contains('403'));
+    expect(http.message(S.bangla), contains('৪০৩')); // Bangla digits
+    expect(
+      const UpdateError(UpdateErrorKind.noApk).message(S.en),
+      contains('no APK'),
+    );
+    expect(
+      const UpdateError(UpdateErrorKind.timeout).message(S.bangla),
+      contains('ইন্টারনেট'),
+    );
+    expect(http.toString(), contains('403')); // English in logs
   });
 
   Future<void> open(

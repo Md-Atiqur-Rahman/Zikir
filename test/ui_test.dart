@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:digital_tasbih/db.dart';
+import 'package:digital_tasbih/l10n.dart';
 import 'package:digital_tasbih/lock.dart';
 import 'package:digital_tasbih/main.dart';
 import 'package:digital_tasbih/pages.dart';
@@ -10,6 +11,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+/// Names as the English screen shows them.
+String zn(String stored) => S.en.zikirName(stored);
+String pn(String stored) => S.en.prayer(stored);
 
 /// Screen-level checks that run without a phone or a browser.
 /// Tests share one database and run in order.
@@ -27,6 +32,9 @@ void main() {
   setUpAll(() async {
     AppLock.enabled.value =
         false; // the lock has its own tests (lock_test.dart)
+    lang.useForTest(
+      'en',
+    ); // these tests read English text; Bangla has its own tests
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
     dir = await Directory.systemTemp.createTemp('zikir_ui');
@@ -74,7 +82,7 @@ void main() {
       phone(tester);
       SharedPreferences.setMockInitialValues({'sound': false});
       await tester.pumpWidget(const TasbihApp());
-      await settle(tester, until: find.text('পড়া: 0/20'));
+      await settle(tester, until: find.text('Done: 0/20'));
 
       // the bottom hint line is gone, and the two total tiles are small
       expect(find.textContaining('Small button'), findsNothing);
@@ -115,7 +123,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // progress chip starts at 0 of 20
-      expect(find.text('পড়া: 0/20'), findsOneWidget);
+      expect(find.text('Done: 0/20'), findsOneWidget);
 
       // menu has bulk import and the clear action
       await tester.tap(find.byType(PopupMenuButton<int>));
@@ -144,9 +152,9 @@ void main() {
         'currentCategory': cats[19].id,
       });
       await tester.pumpWidget(const TasbihApp());
-      await settle(tester, until: find.text('পড়া: 19/20'));
+      await settle(tester, until: find.text('Done: 19/20'));
 
-      expect(find.text('পড়া: 19/20'), findsOneWidget);
+      expect(find.text('Done: 19/20'), findsOneWidget);
       expect(find.text('Congratulations!'), findsNothing);
 
       await tester.tap(bigButton());
@@ -156,7 +164,7 @@ void main() {
       await settle(tester, until: find.text('Congratulations!'));
 
       expect(find.text('Congratulations!'), findsOneWidget);
-      expect(find.textContaining('অভিনন্দন'), findsOneWidget);
+      expect(find.textContaining('All 20 zikirs completed'), findsOneWidget);
       await tester.tap(find.text('Alhamdulillah'));
       await tester.pumpAndSettle();
       // the prayer goes back to automatic after a save, so check the saved data itself
@@ -180,31 +188,29 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(home: DayPage(date: DateTime(2026, 10, 20))),
       );
-      await settle(tester, until: find.text('সারাদিনের মোট (Day total)'));
+      await settle(tester, until: find.text('Day total'));
 
       // collapsed: only the headers (with totals) are on screen, no zikir names
-      expect(find.text('জোহর'), findsOneWidget);
-      expect(find.text('আসর'), findsOneWidget);
-      expect(find.text(cats[0].name), findsNothing);
+      expect(find.text(pn('জোহর')), findsOneWidget);
+      expect(find.text(pn('আসর')), findsOneWidget);
+      expect(find.text(zn(cats[0].name)), findsNothing);
       expect(find.text('200'), findsNWidgets(2)); // জোহর and আসর headers
       expect(find.text('400'), findsOneWidget); // whole-day total header
       expect(find.text('Total = 400   (2 zikir)'), findsOneWidget);
 
       // জোহর comes before আসর (order of the day), even though আসর was saved first
-      final zohr = tester.getTopLeft(find.text('জোহর')).dy;
-      final asr = tester.getTopLeft(find.text('আসর')).dy;
-      final total = tester
-          .getTopLeft(find.text('সারাদিনের মোট (Day total)'))
-          .dy;
+      final zohr = tester.getTopLeft(find.text(pn('জোহর'))).dy;
+      final asr = tester.getTopLeft(find.text(pn('আসর'))).dy;
+      final total = tester.getTopLeft(find.text('Day total')).dy;
       expect(zohr, lessThan(asr));
       expect(total, greaterThan(asr));
 
       // expanding জোহর shows its zikirs on single lines with their counts
-      await tester.tap(find.text('জোহর'));
+      await tester.tap(find.text(pn('জোহর')));
       await tester.pumpAndSettle();
-      expect(find.text(cats[0].name), findsOneWidget);
-      expect(find.text(cats[4].name), findsOneWidget);
-      final nameText = tester.widget<Text>(find.text(cats[0].name));
+      expect(find.text(zn(cats[0].name)), findsOneWidget);
+      expect(find.text(zn(cats[4].name)), findsOneWidget);
+      final nameText = tester.widget<Text>(find.text(zn(cats[0].name)));
       expect(nameText.maxLines, 1);
       expect(nameText.overflow, TextOverflow.ellipsis);
       expect(find.text('100'), findsNWidgets(2));
@@ -220,8 +226,8 @@ void main() {
     final a = cats[2].id; // আল্লাহু আকবার
     await tester.runAsync(() => Db.saveCount(a, recentStr, 'ফজর', 50));
     await tester.pumpWidget(MaterialApp(home: DayPage(date: recent)));
-    await settle(tester, until: find.text('ফজর'));
-    await tester.tap(find.text('ফজর'));
+    await settle(tester, until: find.text(pn('ফজর')));
+    await tester.tap(find.text(pn('ফজর')));
     await tester.pumpAndSettle();
 
     Future<int?> saved() => tester.runAsync<int?>(
@@ -233,7 +239,7 @@ void main() {
     );
 
     // tap the row -> dialog with the current count; + twice, then save
-    await tester.tap(find.text(cats[2].name));
+    await tester.tap(find.text(zn(cats[2].name)));
     await tester.pumpAndSettle();
     expect(find.text('Was 50'), findsOneWidget);
     await tester.tap(find.byKey(const Key('count-plus')));
@@ -246,7 +252,7 @@ void main() {
     expect(find.text('Total = 52   (1 zikir)'), findsOneWidget);
 
     // type a smaller number
-    await tester.tap(find.text(cats[2].name));
+    await tester.tap(find.text(zn(cats[2].name)));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('count-field')), '30');
     await tester.pump();
@@ -256,7 +262,7 @@ void main() {
     expect(await saved(), 30);
 
     // cancelling changes nothing
-    await tester.tap(find.text(cats[2].name));
+    await tester.tap(find.text(zn(cats[2].name)));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('count-plus')));
     await tester.tap(find.text('Cancel'));
@@ -264,7 +270,7 @@ void main() {
     expect(await saved(), 30);
 
     // 0 removes the entry
-    await tester.tap(find.text(cats[2].name));
+    await tester.tap(find.text(zn(cats[2].name)));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('count-field')), '0');
     await tester.pump();
@@ -283,11 +289,11 @@ void main() {
     final cats = (await tester.runAsync(() => Db.categories()))!;
     await tester.runAsync(() => Db.saveCount(cats[3].id, ymd(recent3), '', 70));
     await tester.pumpWidget(MaterialApp(home: DayPage(date: recent3)));
-    await settle(tester, until: find.text('অন্য সময় (no prayer)'));
-    expect(find.text('সারাদিনের মোট (Day total)'), findsNothing);
-    await tester.tap(find.text('অন্য সময় (no prayer)'));
+    await settle(tester, until: find.text('Other time (no prayer)'));
+    expect(find.text('Day total'), findsNothing);
+    await tester.tap(find.text('Other time (no prayer)'));
     await tester.pumpAndSettle();
-    expect(find.text(cats[3].name), findsOneWidget);
+    expect(find.text(zn(cats[3].name)), findsOneWidget);
     expect(find.byIcon(Icons.edit_outlined), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -348,13 +354,13 @@ void main() {
 
     // 10 days ago: shown, but no pencil, no dialog, and a note says why
     await tester.pumpWidget(MaterialApp(home: DayPage(date: old)));
-    await settle(tester, until: find.text('ফজর'));
-    await tester.tap(find.text('ফজর'));
+    await settle(tester, until: find.text(pn('ফজর')));
+    await tester.tap(find.text(pn('ফজর')));
     await tester.pumpAndSettle();
-    expect(find.text(cats[0].name), findsOneWidget);
+    expect(find.text(zn(cats[0].name)), findsOneWidget);
     expect(find.byIcon(Icons.edit_outlined), findsNothing);
     expect(find.byKey(const Key('read-only-note')), findsOneWidget);
-    await tester.tap(find.text(cats[0].name));
+    await tester.tap(find.text(zn(cats[0].name)));
     await tester.pumpAndSettle();
     expect(find.text('Save'), findsNothing);
     expect(tester.takeException(), isNull);
@@ -393,7 +399,7 @@ void main() {
         if (count > 0) 'start': DateTime.now().toIso8601String(),
       });
       await tester.pumpWidget(const TasbihApp());
-      await settle(tester, until: find.textContaining('পড়া:'));
+      await settle(tester, until: find.textContaining('Done:'));
       return cats;
     }
 
@@ -425,7 +431,7 @@ void main() {
         expect(lcd('30'), findsOneWidget);
 
         await openList(tester);
-        await tester.tap(find.text(cats[2].name)); // আল্লাহু আকবার
+        await tester.tap(find.text(zn(cats[2].name))); // আল্লাহু আকবার
         await settle(tester, until: lcd('0'));
         await tester.pumpAndSettle();
 
@@ -451,7 +457,7 @@ void main() {
       final cats = await pump(tester, count: 0, current: 1);
       final total = (await tester.runAsync(() => Db.grandTotal()))!;
       await openList(tester);
-      await tester.tap(find.text(cats[3].name));
+      await tester.tap(find.text(zn(cats[3].name)));
       await tester.pumpAndSettle();
       final prefs = (await tester.runAsync(SharedPreferences.getInstance))!;
       // the switch happens after a few real database reads; wait for it (max ~8 s)
@@ -473,7 +479,7 @@ void main() {
       final cats = await pump(tester, count: 12, current: 4);
       final total = (await tester.runAsync(() => Db.grandTotal()))!;
       await openList(tester);
-      await tester.tap(find.text(cats[4].name).last);
+      await tester.tap(find.text(zn(cats[4].name)).last);
       await tester.pumpAndSettle();
       await settle(tester);
       expect(lcd('12'), findsOneWidget);
