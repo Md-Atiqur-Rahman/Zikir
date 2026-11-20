@@ -485,6 +485,60 @@ class Db {
     await batch.commit(noResult: true);
   }
 
+  // ---- backup / restore ----
+
+  /// Every row of every table, as plain maps, for a backup.
+  static Future<
+    ({
+      List<Map<String, Object?>> categories,
+      List<Map<String, Object?>> entries,
+      List<Map<String, Object?>> prayers,
+    })
+  >
+  dumpAll() async {
+    final db = await _database;
+    List<Map<String, Object?>> copy(List<Map<String, Object?>> rows) => [
+      for (final r in rows) Map<String, Object?>.of(r),
+    ];
+    return (
+      categories: copy(await db.query('categories', orderBy: 'sort_order, id')),
+      entries: copy(
+        await db.query('entries', orderBy: 'date, category_id, prayer'),
+      ),
+      prayers: copy(await db.query('prayers', orderBy: 'ord')),
+    );
+  }
+
+  /// Replaces everything with the given rows, all or nothing.
+  /// Rows must already be valid (see `Backup.parse`).
+  static Future<void> replaceAll({
+    required List<Map<String, Object?>> categories,
+    required List<Map<String, Object?>> entries,
+    required List<Map<String, Object?>> prayers,
+  }) async {
+    final db = await _database;
+    await db.transaction((txn) async {
+      await txn.delete('entries');
+      await txn.delete('categories');
+      await txn.delete('prayers');
+      for (final c in categories) {
+        await txn.insert('categories', c);
+      }
+      for (final p in prayers) {
+        await txn.insert('prayers', p);
+      }
+      for (final e in entries) {
+        // a hand-edited file with a repeated day adds up instead of failing
+        await txn.rawInsert(
+          '''
+          INSERT INTO entries(category_id, date, prayer, count) VALUES(?, ?, ?, ?)
+          ON CONFLICT(category_id, date, prayer) DO UPDATE SET count = count + excluded.count''',
+          [e['category_id'], e['date'], e['prayer'], e['count']],
+        );
+      }
+    });
+  }
+
   static Future<int> grandTotal() async {
     final db = await _database;
     final r = await db.rawQuery(

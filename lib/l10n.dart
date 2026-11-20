@@ -24,6 +24,12 @@ class Lang extends ChangeNotifier {
     _current = _default;
   }
 
+  /// Re-reads the saved default (after a restore) and shows it.
+  Future<void> reload() async {
+    await load();
+    notifyListeners();
+  }
+
   /// Saves the language the app opens in and switches to it now.
   Future<void> setDefault(String code) async {
     _default = code == 'en' ? 'en' : 'bn';
@@ -550,6 +556,87 @@ class S {
     'গণনা যে সময়ে শুরু হয়, সেই সময়ের ওয়াক্তের নামে সংরক্ষিত হয়। একটি ওয়াক্ত '
         'মধ্যরাত পেরিয়ে যেতে পারে (যেমন ইশা রাত ৭:৩০ → ২:০০)। কোনো ওয়াক্তের '
         'বাইরের সময়ের গণনা ওয়াক্তের নাম ছাড়া সংরক্ষিত হয়।',
+  );
+
+  // ---------- backup ----------
+
+  String get ok => t('OK', 'ঠিক আছে');
+  String get menuBackup => t('Backup & restore', 'ব্যাকআপ ও রিস্টোর');
+  String get backupTitle => t('Backup & restore', 'ব্যাকআপ ও রিস্টোর');
+  String get backupIntro => t(
+    'Your counts live only on this phone. If you uninstall the app or lose the '
+        'phone they are gone. Save a backup file now and then, for example to '
+        'Google Drive.',
+    'আপনার গণনা শুধু এই ফোনে আছে। অ্যাপ আনইনস্টল করলে বা ফোন হারালে সব চলে '
+        'যাবে। মাঝে মাঝে ব্যাকআপ ফাইল সংরক্ষণ করুন, যেমন Google Drive-এ।',
+  );
+  String backupNowLine(int zikirs, int total) => t(
+    'In the app now: ${n(zikirs)} zikirs, total ${n(total)}',
+    'এখন অ্যাপে আছে: ${n(zikirs)}টি জিকির, মোট ${n(total)}',
+  );
+  String get backupNever =>
+      t('No backup saved yet.', 'এখনো কোনো ব্যাকআপ সংরক্ষণ করা হয়নি।');
+  String backupLast(String d) => t('Last backup: $d', 'শেষ ব্যাকআপ: $d');
+  String get exportTitle => t('Export backup', 'ব্যাকআপ এক্সপোর্ট');
+  String get exportHelp => t(
+    'Saves your zikirs, all counts and your settings (theme, sounds, language) '
+        'into one file.',
+    'আপনার জিকির, সব গণনা ও সেটিংস (থিম, শব্দ, ভাষা) একটি ফাইলে সংরক্ষণ করে।',
+  );
+  String get exportButton => t('Save backup file', 'ব্যাকআপ ফাইল সংরক্ষণ করুন');
+  String get restoreTitle => t('Restore from file', 'ফাইল থেকে রিস্টোর');
+  String get restoreHelp => t(
+    'Brings everything back from a backup file. It replaces what is in the '
+        'app now.',
+    'ব্যাকআপ ফাইল থেকে সব ফিরিয়ে আনে। এখন অ্যাপে যা আছে তা বদলে যাবে।',
+  );
+  String get restoreButton => t('Choose backup file', 'ব্যাকআপ ফাইল বাছুন');
+  String get backupSaved => t('Backup saved', 'ব্যাকআপ সংরক্ষিত হয়েছে');
+  String backupSavedBody(String name) => t(
+    'File: $name\nKeep it somewhere safe, for example Google Drive.',
+    'ফাইল: $name\nএটি নিরাপদ জায়গায় রাখুন, যেমন Google Drive-এ।',
+  );
+  String backupFailed(String e) =>
+      t('Could not save the backup: $e', 'ব্যাকআপ সংরক্ষণ করা যায়নি: $e');
+  String get restoreAskTitle => t('Replace everything?', 'সব বদলে ফেলবেন?');
+  String restoreFileLine(
+    int zikirs,
+    int entries,
+    int total,
+    String a,
+    String b,
+  ) => t(
+    'In the file: ${n(zikirs)} zikirs, ${n(entries)} saved days, total '
+        '${n(total)} ($a \u2013 $b)',
+    'ফাইলে আছে: ${n(zikirs)}টি জিকির, ${n(entries)}টি এন্ট্রি, মোট '
+        '${n(total)} ($a \u2013 $b)',
+  );
+  String restoreSavedOn(String d) => t('Made on $d', 'তৈরি হয়েছে: $d');
+  String get restoreWarn => t(
+    'Everything in the app now will be replaced. This cannot be undone.',
+    'এখন অ্যাপে যা আছে সব বদলে যাবে। এটি ফেরানো যাবে না।',
+  );
+  String get restoreReplace => t('Replace', 'বদলে দিন');
+  String get restored => t('Restored', 'রিস্টোর হয়েছে');
+  String get restoredBody => t(
+    'Your zikirs, counts and settings are back.',
+    'আপনার জিকির, গণনা ও সেটিংস ফিরে এসেছে।',
+  );
+  String restoreFailed(String e) =>
+      t('Could not restore: $e', 'রিস্টোর করা যায়নি: $e');
+  String get backupNotJson => t(
+    'This file is not a readable backup.',
+    'এই ফাইলটি পড়ার মতো ব্যাকআপ নয়।',
+  );
+  String get backupNotZikir =>
+      t('This is not a Zikir backup file.', 'এটি জিকিরের ব্যাকআপ ফাইল নয়।');
+  String get backupNewer => t(
+    'This backup was made by a newer version of the app. Update the app first.',
+    'এই ব্যাকআপ অ্যাপের নতুন সংস্করণে তৈরি। আগে অ্যাপ আপডেট করুন।',
+  );
+  String backupBroken(String what) => t(
+    'The backup file is damaged or incomplete ($what).',
+    'ব্যাকআপ ফাইলটি নষ্ট বা অসম্পূর্ণ ($what)।',
   );
 }
 

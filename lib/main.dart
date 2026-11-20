@@ -10,6 +10,7 @@ import 'package:sqflite/sqflite.dart' show databaseFactory;
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:vibration/vibration.dart';
 
+import 'backup.dart';
 import 'db.dart';
 import 'l10n.dart';
 import 'lock.dart';
@@ -353,6 +354,17 @@ class _CounterPageState extends State<CounterPage> {
     if (ok == true) _clearSession();
   }
 
+  /// Re-reads the settings kept in preferences (after a restore replaced them).
+  Future<void> _applyPrefs() async {
+    final p = _prefs ?? await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _vibrate = p.getBool('vibrate') ?? true;
+      _sound = p.getBool('sound') ?? true;
+      _currentId = p.getInt('currentCategory');
+    });
+  }
+
   Future<void> _open(Widget page) async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
     _reload();
@@ -418,6 +430,11 @@ class _CounterPageState extends State<CounterPage> {
                   showLanguageDialog(context);
                   return;
                 }
+                if (v == 9) {
+                  // a restore can change the switches and the current zikir
+                  _open(const BackupPage()).then((_) => _applyPrefs());
+                  return;
+                }
                 _open(switch (v) {
                   0 => const ZikirListPage(),
                   1 => const PrayerTimesPage(),
@@ -433,6 +450,7 @@ class _CounterPageState extends State<CounterPage> {
                 PopupMenuItem(value: 2, child: Text(s.menuTheme)),
                 PopupMenuItem(value: 3, child: Text(s.menuSounds)),
                 PopupMenuItem(value: 4, child: Text(s.menuBulkImport)),
+                PopupMenuItem(value: 9, child: Text(s.menuBackup)),
                 PopupMenuItem(value: 8, child: Text(s.menuLanguage)),
                 PopupMenuItem(value: 7, child: Text(s.menuAppLock)),
                 PopupMenuItem(value: 6, child: Text(s.menuUpdate)),

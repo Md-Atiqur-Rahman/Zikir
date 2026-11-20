@@ -46,6 +46,7 @@ dependencies:
   ota_update: ^7.1.0
   flutter_localizations:
     sdk: flutter
+  file_picker: ^13.4.0
 
 dev_dependencies:
   flutter_test:
